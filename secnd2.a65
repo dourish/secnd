@@ -1,0 +1,1139 @@
+
+;;;
+;;; SECND - A FORTH FOR 6502
+;;;
+;;; Since "FORTH" is actually an abbreviation of "FOURTH", "SECND"
+;;; is an abbreviation of "SECOND", it being my second FORTH
+;;; implementation. The last one was over 30 years ago, but let's
+;;; not worry about that now. This time, I'm sticking closer to
+;;; standards, albeit outdated ones; the starting point for this
+;;; is FigFORTH although it may get ANSIfied along the way.
+;;;
+;;; I'm building this for my single-board 6502 computer, the Mite.
+;;; For now at least, this is written to be loaded in RAM.
+;;;
+;;; Paul Dourish, December 2017
+;;;
+;;; Version history:
+;;; v01  first basic version of interpreter up and running
+;;; v02  adding R-stack operators, variables, loops (run time only)
+
+
+  * = $0300
+
+;;;
+;;; Variables/space setup
+;;;
+
+SCRATCH    = $0010  ; through to $001F (adopted from monitor)
+
+;;;
+;;; space available from monitor is 0050-007F
+;;; 00800 through 00FF is operand stack
+
+;;; IP is the instruction pointer
+;;; DT (dictionary top) pointer to start (actually, end) of dictionary
+;;; RP is return stack pointer
+;;; TMP and TMP1 hold temporary values (need two bytes)
+;;;
+IP=$0050            ; and 0051
+RP=$0052            ; and 0053
+DT=$0054            ; and 0054
+TMP=$0056           ; and 0057
+TMP1=$0057          ; and 0058
+TPTR=$005A
+TCNT=$005B
+DPTR=$005C          ; and 005D
+INPUT= $7F00        ; input space
+WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
+
+  jmp coldstart     ; jump past code defined in stack routines
+
+#include "../mitemon/decl.a65"
+#include "../mitemon/stack.a65"
+
+
+;;;
+;;; initialization and configuration
+;;;
+coldstart
+  ;; initialize stack...
+  jsr initstack
+
+  ;; initialize variables...
+
+  ;; IP is the Forth instruction pointer
+  stz IP
+  stz IP+1
+
+  ;; Initialize the return stack. I'm just putting that on page 2, 
+  ;; growing upwards, until I have a better idea.
+  stz RP
+  lda #$02
+  sta RP+1
+
+  ;; Initialize DT to the last entry on the dictionary (below)
+  lda #<d21entry
+  sta DT
+  lda #>d21entry
+  sta DT+1  
+
+  ;; jump to test code
+  ;jmp gotest
+
+  ;; jump to text interpreter
+  jmp startinterp
+
+
+
+;;;
+;;; DICTIONARY
+;;;
+;;; Each entry in the dictionary comprises:
+;;; - one byte that is both tags (three upper bits) and word length
+;;;   five lower bits)
+;;; - the characters making up the word definition name
+;;; - pointer to next entry
+;;; - the "code word" (address of code handling this instruction, which
+;;;   will often be DOLIST for compiled words)
+;;; - the parameter space (often the list of addresses for executing
+;;;   this word, and often ending with EXIT)
+;;;
+
+d0entry
+  .byte 4
+  .byte "exit"
+d0link
+  .word $0000
+d0code
+  .word exit
+
+d1entry
+  .byte 1
+  .byte "+"
+d1link
+  .word d0entry
+d1code
+  .word doplus
+
+d2entry
+  .byte 1
+  .byte "*"
+d2link
+  .word d1entry
+d2code
+  .word dotimes
+
+d3entry
+  .byte 4
+  .byte "test"
+d3link
+  .word d2entry
+d3code
+  .word dolist
+d3param
+  .word d2code
+  .word d1code
+  .word d0code
+
+d4entry
+  .byte 4
+  .byte "meta"
+d4link
+  .word d3entry
+d4code
+  .word dolist
+d4param
+  .word d3code
+  .word d3code
+  .word d0code
+
+d5entry
+  .byte 5
+  .byte "dolit"
+d5link
+  .word d4entry
+d5code
+  .word dolit
+
+d6entry
+  .byte 1
+  .byte "."
+d6link
+  .word d5entry
+d6code
+  .word doprint
+
+d7entry
+  .byte 5
+  .byte "twice"
+d7link
+  .word d6entry
+d7code
+  .word dolist
+d7param
+  .word d5code      ; code for dolit
+  .word 0002
+  .word d2code
+  .word d0code
+
+d8entry
+  .byte 5
+  .byte "meta2"
+d8link
+  .word d7entry
+d8code
+  .word dolist
+d8param
+  .word d7code
+  .word d6code
+  .word d0code
+
+d9entry
+  .byte 3
+  .byte "dup"
+d9link
+  .word d8entry
+d9code
+  .word dodup
+
+d10entry
+  .byte 4
+  .byte "swap"
+d10link
+  .word d9entry
+d10code
+  .word doswap
+
+d11entry
+  .byte 4
+  .byte "drop"
+d11link
+  .word d10entry
+d11code
+  .word dodrop
+
+d12entry
+  .byte 1
+  .byte "/"
+d12link
+  .word d11entry
+d12code
+  .word dodiv
+
+d13entry
+  .byte 3
+  .byte "mod"
+d13link
+  .word d12entry
+d13code
+  .word domod
+
+d14entry
+  .byte 1
+  .byte "="
+d14link
+  .word d13entry
+d14code
+  .word doequal
+
+d15entry
+  .byte 5
+  .byte "depth"
+d15link
+  .word d14entry
+d15code
+  .word dodepth
+
+d16entry
+  .byte 1
+  .byte ">"
+d16link
+  .word d15entry
+d16code
+  .word dogreater
+
+d17entry
+  .byte 1
+  .byte "<"
+d17link
+  .word d16entry
+d17code
+  .word doless
+
+d18entry
+  .byte 2
+  .byte "cr"
+d18link
+  .word d17entry
+d18code
+  .word docr
+
+d19entry
+  .byte 4
+  .byte "emit"
+d19link
+  .word d18entry
+d19code
+  .word doemit
+
+d20entry
+  .byte 4
+  .byte "over"
+d20link
+  .word d19entry
+d20code
+  .word doover
+
+d21entry
+  .byte 3
+  .byte "rot"
+d21link
+  .word d20entry
+d21code
+  .word dorot
+
+
+;;;
+;;; The words below are my experiment on calling things and getting
+;;; back to the interpreter. Dummy is the word we'll enter in order to
+;;; execute something; the point of it is to make sure that after we've
+;;; executed what we want, we run "doquitword", which should take us
+;;; back into the interpreter loop
+;;;
+
+
+doquitword
+  .byte 0
+doquitlink
+  .word $0000
+doquitcode
+  .word interploop
+
+dummy
+  .byte 0
+dummylink
+  .word $0000
+dummycode
+  .word dolist      ; won't actually run this, start with NEXT instead
+dummyparam
+  .word $0000       ; will write in the actual code link word here
+  .word doquitcode
+
+
+
+
+
+;;;
+;;; INNER INTERPRETER
+;;;
+;;; The three routines below -- NEXT, DOLIST, and EXIT -- are the core
+;;; of the inner interpreter, which executes stored words.
+;;;
+;;; NEXT moves from one instruction to the next inside a defined word.
+;;; This code is included at the end of each assembly language routine
+;;; (or rather, we jump to it).
+;;;
+;;; DOLIST begins the execution of a compiled word. It stores the IP
+;;; on the return stack, resets the IP to the new word, and then calls
+;;; NEXT to start on it.
+;;;
+;;; EXIT is compiled in as the last address of each compiled word. It
+;;; undoes what DOLIST has done, and moves back to the earlier execution
+;;; context.
+;;;
+;;; Note that none of these are subroutines -- everything is connected
+;;; as direct jumps (actually, indirect jumps!) with the RSTACK used
+;;; to keep track of what's going on.
+
+
+
+;;; DOLIST is the executing code for a colon-defined word.
+dolist
+  ;; first, push the current instruction pointer onto the
+  ;; return stack
+  ;; NB-- this was previously done via jsr rpush but I unrolled it
+  ;; here to save some loads/stores and a JSR. Old code is left in
+  ;; comments as documentation.
+  lda IP
+  ;sta stackaccess
+  sta (RP)
+  inc RP
+  lda IP+1
+  ;sta stackaccess+1
+  sta (RP)
+  inc RP
+  ;jsr rpush         ; push onto the return stack
+
+  ;; next, grab the address stored at the location signaled by
+  ;; the instruction pointer (ie, doubly-indirect through IP) and
+  ;; store it in TMP
+  lda (IP)
+  sta TMP
+  ldy #1
+  lda (IP),y
+  ;sta TMP+1 (short-circuiting)
+  ;; then copy it into IP
+  ;lda TMP+1 (short-circuiting)
+  sta IP+1
+  lda TMP
+  sta IP
+
+  ;; IP now points to the CODE word of the defined word we want
+  ;; to execute. So, call NEXT to increment IP and execute
+  ;jmp next         ; commented out because we can just fall through
+
+;;; ** PUT NOTHING HERE... depending on fall-through from DOLIST to NEXT!
+
+;;; NEXT moves to the next instruction in the sequence defined in
+;;; a colon-defined word. Increments the instruction pointer, loads
+;;; what it points to into a defined place, and then does the jump.
+next
+.(
+  inc IP            ; lower byte first
+  bne continue      ; skip upper byte if we haven't rolled over
+  inc IP+1
+continue
+.)
+.(
+  inc IP            ; now same again, because we need to inc by 2
+  bne continue
+  inc IP+1
+continue
+.)
+  ldy #0            ; IP now points to the location storing the next
+  lda (IP),y        ; word we need to execute. fetch that location,
+  sta TMP           ; and store it in TMP.
+  iny
+  lda (IP),y
+  sta TMP+1
+
+  lda (TMP),y       ; TMP contains a pointer to a code word. Load
+  sta TMP1+1        ; the code address stored there into TMP1.
+  dey
+  lda (TMP)
+  sta TMP1
+
+  jmp (TMP1)        ; execute the code for this instruction/word
+
+
+
+;;; EXIT is the routine that is called at the end of each colon-defined
+;;; word (it's compiled in as the last address to be called). It undoes
+;;; DOLIST... it removes an address from the return stack, puts it back
+;;; as the instruction pointer, and calls next.
+exit
+  ;; formerly, jsr rpull, now unrolled.
+  dec RP            ; take two bytes off the return stack
+  dec RP
+  ldy #1            ; now take the value that was on the return stack
+  lda (RP),y        ; and place it in the instruction pointer
+  sta IP+1
+  lda (RP)
+  sta IP
+  jmp next          ; go execute the next instruction
+
+
+;;;
+;;; PRIMITIVES
+;;;
+
+doplus
+  jsr add16
+  jmp next
+
+dominus
+  jsr sub16
+  jmp next
+
+dotimes
+  jsr mult16
+  jmp next
+
+dodiv
+  jsr div16
+  jmp next
+
+domod
+  jsr mod16
+  jmp next
+
+doprint
+  jsr print16dec
+  jmp next
+
+docr
+  jsr crlf
+  jmp next
+
+dodup
+  jsr dup16
+  jmp next
+
+dodrop
+  jsr pop16
+  jmp next
+
+doswap
+  jsr swap16
+  jmp next
+
+doequal
+.(
+  lda stackbase+1,x
+  cmp stackbase+3,x
+  bne notequal
+  lda stackbase+2,x
+  cmp stackbase+4,x
+  bne notequal
+equal
+  inx
+  inx
+  lda #$01
+  sta stackbase+1,x
+  stz stackbase+2,x
+  bra done
+notequal
+  inx
+  inx
+  stz stackbase+1,x
+  stz stackbase+2,x
+done
+.)
+  jmp next
+
+;; on the 6502, there's no simple "greater than" instruction;
+;; BCS is "greater than or equal to". So, use BCC for "less than"
+;; and invert result. also need different tests for upper and
+;; lower bytes. This is also confused by the fact that the item that's
+;; "lower" on the stack is higher in memory.
+dogreater
+.(
+  lda stackbase+4,x ; most significant byte
+  cmp stackbase+2,x ; is "lower" on stack less than "upper"?
+  beq testlsb       ; equal, so go to lower byte
+  bmi notgreater    ; less than, so answer is "no"
+  bra greater       ; greater than, so answer is "yes"
+testlsb
+  lda stackbase+3,x ; less signficant byte
+  cmp stackbase+1,x ; is "higher" on stack less than "lower"?
+  beq notgreater
+  bmi notgreater
+greater
+  inx
+  inx
+  lda #$01
+  sta stackbase+1,x
+  stz stackbase+2,x
+  bra done
+notgreater
+  inx
+  inx
+  stz stackbase+1,x
+  stz stackbase+2,x
+done
+.)
+  jmp next
+
+doless
+.(
+  lda stackbase+4,x
+  cmp stackbase+2,x
+  bmi yes
+  beq testlsb
+  bra no
+testlsb
+  lda stackbase+3,x
+  cmp stackbase+1,x
+  beq no
+  bpl no
+yes
+  inx
+  inx
+  lda #$01
+  sta stackbase+1,x
+  stz stackbase+2,x
+  bra done
+no
+  inx
+  inx
+  stz stackbase+1,x
+  stz stackbase+2,x
+done
+.)
+  jmp next
+
+dodepth
+  stx SCRATCH
+  lda #$ff
+  sec
+  sbc SCRATCH
+  clc
+  lsr
+  stz stackbase,x
+  dex
+  sta stackbase,x
+  dex
+  jmp next
+
+doemit
+  lda stackbase+1,x
+  jsr puta
+  inx
+  inx
+  jmp next
+
+doover
+  dex
+  dex
+  lda stackbase+5,x
+  sta stackbase+1,x
+  lda stackbase+6,x
+  lda stackbase+2,x
+  jmp next
+
+dorot
+  dex               ; make some new space on the stack
+  dex
+  lda stackbase+7,x ; first, copy the item from three down on the stack
+  sta stackbase+1,x ; into the new space
+  lda stackbase+8,x ; so, 7/8 -> 1/2
+  sta stackbase+2,x
+
+  lda stackbase+5,x ; now move everything back
+  sta stackbase+7,x ; first, 5/6 -> 7/8
+  lda stackbase+6,x
+  sta stackbase+8,x
+  lda stackbase+3,x ; then 3/4 -> 5/6
+  sta stackbase+5,x
+  lda stackbase+4,x
+  sta stackbase+6,x
+  lda stackbase+1,x ; then 1/2 -> 3/4
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+
+  inx               ; clean up
+  inx
+
+  jmp next
+
+
+;;; DOLIT is a little funky. DOLIT is a word, but it operates on the word
+;;; list of the word from which it is called. So we look on the return stack,
+;;; increment the value by two to advance to the next word, read the
+;;; data at that location, put it on the stack, and then return, letting
+;;; let NEXT advance the IP further.
+dolit
+.(
+  inc IP            ; increment IP to next cell (which stores the value)
+  bne continue
+  inc IP+1
+continue
+.)
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+  ldy #0            ; load the value there
+  lda (IP),y
+  sta stackaccess   ; and store in stackaccess
+  iny               ; (now the second byte)
+  lda (IP),y
+  sta stackaccess+1
+  jsr push16        ; add to the data stack
+  jmp next
+
+
+
+;;;
+;;; TEXT INTERPRETER
+;;;
+;;; For the moment, this is a basically a stopgap. The real FORTH
+;;; text interpreter has many individual components that manifest
+;;; themselves as words in the dictionary, and we'll get there.
+;;; (The fact that the text interpreter is called QUIT in true Forth
+;;; is the ultimate testement to Chuck Moore's twisted nature.)
+;;; This is just something to get us going. Again, much borrowed here
+;;; from the code of the monitor.
+;;;
+
+
+
+;;; initialize the interpreter
+;;;
+startinterp
+
+  ;; set up buffer (nothing to do)
+
+  ;; set up buffer pointer (current pointer within text buffer)
+  stz TPTR
+
+  ;; set up buffer counter (number of characters input)
+  stz TCNT
+
+  ;; print greeting
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda greeting,y
+  beq interploop
+  sta ACIA_DATA
+  iny
+  jmp next_char
+.)
+
+
+interploop
+
+  ;; if no more input, ->nomoreinput
+
+  lda TPTR          ; current pointer
+  cmp TCNT          ; is that as much text as was read?
+  beq nomoreinput   ; if yes, print prompt and get more
+
+  tay               ; put TPTR into Y
+interpword
+  ;; begin loop
+
+.(
+  ;; look for next word
+  lda INPUT,y
+  cmp #$20          ; space
+  beq nextchar
+  cmp #$09          ; tab
+  beq nextchar
+  bne readword      ; not white space, so go and read a word
+
+  ;; continue skipping past space
+nextchar
+  iny
+  cpy TCNT
+  beq nomoreinput
+  jmp interpword
+.)
+
+  ;; no more input -- we have exhausted the text buffer. refill.
+nomoreinput
+  jsr okcrlf        ; signal completion
+refill
+  jsr readline      ; read another line of text
+  stz TPTR          ; reset the pointer
+  bra interploop    ; resume processing
+
+  ;; we have detected the start of a non-space sequence. read a word
+  ;; into a counted string at WORD.
+readword
+.(
+  stz WORD
+  phx
+  ldx #1            ; X starts at 1 because 0 is the count
+nextchar
+  lda INPUT,y
+  beq doneword      ; done if we hit NULL
+  cmp #$20
+  beq doneword      ; done if we hit space
+  cmp #$09
+  beq doneword      ; done if we hit tab
+  sta WORD,x        ; X starts at 1 because 0 is the count
+  stx WORD
+  iny
+  cpy TCNT          ; run off the end of the buffer?
+  beq doneword
+  inx
+  bra nextchar
+doneword
+  plx
+  sty TPTR          ; update the pointer (and free up Y)
+.)
+
+  ;; check for match
+
+matchword
+  ;; set up search by initializing dictionary pointer
+  lda DT
+  sta DPTR
+  lda DT+1
+  sta DPTR+1
+
+nextentry
+  ;; have we run out of dictionary entries? (when DPTR is $0000)
+  lda DPTR
+  bne compareentry
+  lda DPTR+1
+  beq nomatch
+
+compareentry
+  ;; compare words. counted strings can be compared directly, will compare
+  ;; counts first. But we need to mask out the tags in the count.
+
+  ldy #0
+  lda (DPTR),y
+  and #%00011111    ; mask off the tags
+  cmp WORD,y        ; compare word lengths
+  bne trynext       ; no match
+
+  ;; now compare words. do this from the end (for easier testing)
+  ldy WORD
+.(
+nextchar
+  lda (DPTR),y
+  cmp WORD,y
+  bne trynext
+  dey
+  bne nextchar
+.)
+  ;; successful match!
+  bra gotmatch
+  
+  ;; loop to next entry
+trynext
+  lda (DPTR)        ; get word length...
+  tay               ; store in Y, and add one...
+  iny               ; for the pointer to the next entry
+  lda (DPTR),y      ; update DPTR to point to next entry
+  sta TMP
+  iny
+  lda (DPTR),y  
+  sta DPTR+1
+  lda TMP
+  sta DPTR
+  bra nextentry
+
+  ;; we found a match for a word to execute. Set up the context
+  ;; and call NEXT to get started.
+gotmatch
+
+  ;; DPTR stores the start of the entry for the word to execute.
+  ;; So its code word is at (DPTR) + wordlength + 1 (len) + 2 (link)
+  lda (DPTR)        ; word length
+  and #%00011111    ; mask off tag bits
+  inc 		    ; +1 for the length byte
+  inc
+  inc               ; + 2 more for the link word
+  clc
+  adc DPTR          ; add to address and store in dummy word entry
+  sta dummyparam
+  lda DPTR+1
+  adc #$0
+  sta dummyparam+1
+
+  ;; put the dummy parameter address into IP (actually, the code
+  ;; address because NEXT will inc it).
+  lda #<dummycode
+  sta IP
+  lda #>dummycode
+  sta IP+1
+
+  ;; jump to NEXT to start running it
+  jmp next
+
+  ;; we didn't find a match in the dictionary, so see if we can parse
+  ;; it as a number.
+nomatch
+  ;; before we do the conversion, check that all the letters are digits
+
+  ldy WORD
+numcheck
+  lda WORD,y
+  cmp #$30
+  bcc nointerpret   ; BCC = branch if less than
+  cmp #$40
+  bcs nointerpret   ; BCS = branch if greater or equal
+  dey
+  bne numcheck
+
+  ;; convert number and put it on the stack
+  ;; my routines for this us a null-terminated string, so add a null
+  ldy WORD
+  iny
+  lda #0
+  sta WORD,y        ; add a null
+  lda #<WORD        ; put address on the stack threshold
+  sta stackaccess
+  lda #>WORD
+  sta stackaccess+1
+.(
+  inc stackaccess   ; bump it by one to avoid the count
+  bne done
+  inc stackaccess+1
+done
+.)
+  jsr push16
+  jsr readdec16     ; convert it, leave it on the stack
+  jmp interploop
+  
+  ;; if we get here, we couldn't find a match, nor could we read it as
+  ;; a number. there's no interpretation, so issue an error, flush
+  ;; the input, and loop
+nointerpret  
+
+  ;; print an error, in three stages. first, a space; then, the
+  ;; undefined word; finally, the error message.
+
+.(
+wait_txd_empty3
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty3
+  lda #$20
+  sta ACIA_DATA
+.)
+
+  ldy #1
+.(
+next_char
+wait_txd_empty3
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty3
+  lda WORD,y
+  sta ACIA_DATA
+  iny
+  cpy WORD
+  bcc next_char
+  beq next_char
+.)
+
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda cantinterpret,y
+  beq nextstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+nextstr
+.)
+
+  ;; flush input.
+  lda TCNT
+  sta TPTR          ; wait... off by one?
+  jmp refill
+
+
+
+readline
+  ldy #0
+  stz TCNT          ; reset the counter
+readchar
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  cmp #$08           ; check for backspace
+  beq backspace
+  cmp #$0D           ; check for newline
+  beq doneline
+  sta INPUT,y        ; track the input
+  iny
+  jsr puta           ; echo the typed character
+  jmp readchar       ; loop to repeat
+backspace
+  cpy #0             ; beginning of line?
+  beq readchar
+  dey                ; if not, go back one character
+  jsr puta           ; move cursor back
+  jmp readchar
+
+  ;; this is where we land if the line input has finished
+  ;;
+doneline
+  lda #0
+  sta INPUT,y       ; add a null terminator
+  sty TCNT          ; update character count
+  rts
+
+
+
+
+
+;;;
+;;; test harness
+
+gotest
+;;; initialize the stack. 5 on top, then 4, then 2, 2, 2.
+  lda #$02
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr push16
+  jsr push16
+  lda #04
+  sta stackaccess
+  jsr push16
+  lda #05
+  sta stackaccess
+  jsr push16
+
+  ;;; load the instruction pointer
+  ;;; pretend we are executing the first "line" of "meta"
+;  lda #<d4code
+;  sta IP
+;  lda #>d4code
+;  sta IP+1
+  ;;; pretend we are executing the first "line" of "meta2"
+  lda #<d8code
+  sta IP
+  lda #>d8code
+  sta IP+1
+
+  ;;; go -- fetch the address indirectly through the IP
+  lda (IP)
+  sta TMP
+  ldy #1
+  lda (IP),y
+  sta TMP+1
+
+  ;; before we jump, reset the IP
+;  lda #<d4param
+;  sta IP
+;  lda #>d4param
+;  sta IP+1
+  lda #<d8param
+  sta IP
+  lda #>d8param
+  sta IP+1
+
+  jmp (TMP)
+
+  ;;; stop
+
+
+
+;;;
+;;; support routines
+;;;
+
+rpush
+  lda stackaccess
+  sta (RP)
+  inc RP
+  lda stackaccess+1
+  sta (RP)
+  inc RP            ; BUG presumes that RP doesn't roll over page boundary
+  rts
+
+
+rpull
+  dec RP
+  dec RP
+  ldy #1
+  lda (RP),y
+  sta stackaccess+1
+  lda (RP)
+  sta stackaccess
+  rts
+
+
+
+;;;
+;;; I/O SUPPORT ROUTINES
+;;; These have been "borrowed" from mitemon
+;;;
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+
+
+puta
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+okcrlf
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda ok,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+  rts
+.)
+
+
+crlf
+  pha
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0d
+  sta ACIA_DATA
+.(
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+.)
+  lda #$0a
+  sta ACIA_DATA
+  pla
+  rts
+
+
+hextable:        .byte "0123456789ABCDEF"
+greeting	 .byte "SECND Forth v02 (Paul Dourish, 2017-12)", $00
+ok:		 .byte "  OK", $0d, $0a, $00
+cantinterpret:   .byte ": not defined", $0d, $0a, $00
+match:		 .byte " match!", $00
