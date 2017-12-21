@@ -1,8 +1,8 @@
 # secnd
 FORTH implementation for 65C02
 
-When I was 17, I wrote an implementation of FORTH for the 6502
-microprocessor in a notebook during my summer vacation, and later got
+When I was 17, I wrote an implementation of FORTH in 6502 assembly
+language in a notebook during my summer vacation, and later got
 it working for the BBC Micro. The computer, the floppy disks, and the
 notebook are, sadly, long gone. But I lately built a 65C02-based
 single-board computer as a hobby and so, naturally, I need to have a
