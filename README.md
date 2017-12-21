@@ -14,6 +14,10 @@ conventions about implementation. This one is hewing closer to the
 standard models for the interfunctioning of interpreter and compiler,
 the operation of IMMEDIATE words, and so on.
 
+FORTH was an abbreviation of "fourth", limited by the conventions
+of the filesystem on which it was written. "SECND" is an abbreviation
+of "second" as an homage.
+
 v01 is a very first, minimal implementation with a text interpreter
 and just a few words.
 
