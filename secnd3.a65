@@ -1479,6 +1479,12 @@ nextchar
 
   ;; no more input -- we have exhausted the text buffer. refill.
 nomoreinput
+  ;; are we compiling?
+  lda STATUS
+  beq usualprompt   ; not compiling so say "OK" as usual
+  jsr cprompt       ; different prompt to say we're still compiling
+  bra refill
+usualprompt
   jsr okcrlf        ; signal completion
 refill
   jsr readline      ; read another line of text
@@ -1703,6 +1709,23 @@ done
   rts
 .)
 
+cprompt
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda dots,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+  rts
+.)
+
 
 crlf
   pha
@@ -1729,6 +1752,7 @@ wait_txd_empty
 hextable:        .byte "0123456789ABCDEF"
 greeting	 .byte "SECND 6502 Forth v03 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
+dots:		 .byte "  ...", $0d, $0a, $00
 cantinterpret:   .byte ": not defined", $0d, $0a, $00
 match:		 .byte " match!", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
