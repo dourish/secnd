@@ -1752,7 +1752,7 @@ wait_txd_empty
 hextable:        .byte "0123456789ABCDEF"
 greeting	 .byte "SECND 6502 Forth v03 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
-dots:		 .byte "  ...", $0d, $0a, $00
+dots:		 .byte "   ...", $0d, $0a, $00
 cantinterpret:   .byte ": not defined", $0d, $0a, $00
 match:		 .byte " match!", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
