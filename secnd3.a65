@@ -96,6 +96,8 @@ coldstart
   stz IP
   stz IP+1
 
+  stz STATUS        ; turn of compilation
+
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing upwards, until I have a better idea.
   stz RP
