@@ -37,7 +37,8 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 0FFF is the interpreter and compiler code (this file)
 ;;; 1000 through 77FF is user dictionary space
-;;; 7800 through 7EBF is CURRENTLY UNASSIGNED
+;;; 7800 through 7DFF is CURRENTLY UNASSIGNED
+;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
 ;;; 7F00 through 7FFF is the input buffer (TIB)
 
@@ -70,8 +71,10 @@ DPTR=$005C          ; and 005D
 DP=$005E            ; and 005F
 STATUS=$0060        ; status word
 CWORD=$0061         ; and 0062
-INPUT= $7F00        ; input space
+PADPTR=$0063        ; and 0064
+PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
+INPUT=$7F00         ; input space
 
 COMPILE=%00000001   ; status flags
 
@@ -452,7 +455,6 @@ d36link
 d36code
   .word dofromr
 
-dtop
 d37entry
   .byte 1
   .byte "r"
@@ -460,6 +462,16 @@ d37link
   .word d36entry
 d37code
   .word dorcopy
+
+dtop
+d38entry
+  .byte %00100010   ; IMM flag plus count of two
+  .byte $2e, $22    ; dot, quote (.")
+d38link
+  .word d37entry
+d38code
+  .word dodotqu
+
 
 ;; TOP OF DICTIONARY
 
@@ -886,8 +898,6 @@ docstore
   jmp next
 
 
-
-
 ;;; Turn an integer count of cells into a count of bytes. Since
 ;;; my cells are two bytes, that means multiplying item on top of
 ;;; stack by two (shift left).
@@ -1136,6 +1146,105 @@ continue
 
   jmp next
 
+
+;;; Do dot-quote. I'm not entirely happy with my solution for this yet.
+;;; This word has three different context-dependent behaviors:
+;;; 1. when we are compiling (determined by compiler flag), assemble
+;;;    string from the text stream and compile it into the word.
+;;; 2. when we are called as part of a regular execution cycle, print
+;;;    the word that's compiled in following this instruction.
+;;; 3. when we are running in the interpreter, as determined by IP
+;;;    pointing to the dummy word, assemble the string that follows
+;;;    in the input buffer and print it.
+dodotqu
+.(
+  ;; are we compiling?
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  ;; compile it (case 1)
+
+nocompile
+  ;; are we interactive?
+  ;; we can tell if IP points to dummyparam
+  lda IP
+  cmp #<dummyparam
+  bne nointerp
+  lda IP+1
+  cmp #>dummyparam
+  bne nointerp
+
+  ;; interactive behaviour (case 3)
+  ;; first, set up the PAD ptr
+  lda #<PAD
+  sta PADPTR
+  lda #>PAD
+  sta PADPTR+1
+
+  ;; read the next word into WORD
+continue
+  jsr readnext
+
+  ;; is it a closing quote? count of 1, char is $22
+  lda WORD
+  cmp #$01          ; check the string length
+  bne assemble
+  lda WORD+1        ; we know it's a single-character string
+  cmp #$22          ; check the single character
+  beq finished
+
+assemble
+  ;; concatenate onto the string we're assembling at PAD
+  lda #$20          ; space
+  sta (PADPTR)
+  ldy WORD          ; the character count
+nextchar
+  lda WORD,y
+  sta (PADPTR),y    ; Y is off-by-one but it's okay (leading space)
+  dey
+  bne nextchar
+
+  ;; update PADPTR
+  lda WORD          ; length of this most recent word
+  inc               ; plus leading space
+  clc
+  adc PADPTR
+  sta PADPTR        ; update the pointer
+  lda PADPTR+1
+  adc #0            ; in case we generated a carry...
+  sta PADPTR+1
+
+  bra continue
+
+finished
+  ;; add a null at the end of the string
+  lda #$00
+  sta (PADPTR)
+
+  ;; we've finished the string, so print it
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda PAD,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+
+  jmp next
+
+nointerp
+  ;; regular execution (case 2)
+.)
+
+  jmp next
 
 
 ;;;
