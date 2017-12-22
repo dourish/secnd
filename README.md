@@ -22,9 +22,11 @@ of "second" as an homage.
 v01 is a very first, minimal implementation with a text interpreter
 and just a few words.
 
-v02 has a more fleshed out vocabulary, variables, and strings.
+v02 has a more fleshed out vocabulary, variables, and R-stack
+manipulations.
 
-v03 will include the initial compiler, plus looping and conditionals.
+v03 will include the initial compiler, plus strings, looping, and
+conditionals.
 
 Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of
