@@ -469,6 +469,7 @@ d38entry
   .byte $2e, $22    ; dot, quote (.")
 d38link
   .word d37entry
+dotquotecode
 d38code
   .word dodotqu
 
@@ -1163,7 +1164,53 @@ dodotqu
   bit #COMPILE
   beq nocompile
 
-  ;; compile it (case 1)
+  ;; Yes. compile it (case 1)
+  ;; first, add in the execution word
+  lda #<dotquotecode
+  sta (DP)
+  ldy #1
+  lda #>dotquotecode
+  sta (DP),y
+
+  ;; then update DP by 2, to account for that word
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+  ;; next, assemble the string on the PAD
+  jsr assemblestr
+
+  ;; now we copy it into space where we are comping, pointed to by DP.
+  lda PAD           ; first, copy the length
+  sta (DP)
+
+  tay               ; now copy the rest of the string (backwards)
+charloop
+  lda PAD,y
+  sta (DP),y
+  dey
+  bne charloop
+
+  ;; now update DP to account for the string
+  clc
+  lda PAD           ; that's the length count for the string
+  inc               ; add one for the count byte
+  adc DP            ; bump DP by that many bytes
+  sta DP
+  lda DP+1
+  adc #$0
+  sta DP+1
+
+  jmp next          ; and proceed. we're done.
 
 nocompile
   ;; are we interactive?
@@ -1175,13 +1222,107 @@ nocompile
   cmp #>dummyparam
   bne nointerp
 
-  ;; interactive behaviour (case 3)
+  ;; Yes, so we need the interactive behaviour (case 3)
+
+  ;; first. assemble the string to be printed
+  jsr assemblestr
+
+  ;; now print it
+  ;; but first, write in a space over the length indicator,
+  ;; which we don't need because it's null-terminated
+  lda #$20
+  sta PAD
+
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda PAD,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+
+  jmp next          ; we're done so proceed to next instruction
+
+nointerp
+  ;; Finally, this is the regular behavior (case 2). We're executing
+  ;; from a compiled word. So the next byte after that denoted by
+  ;; the instruction pointer is a counted string. Print it, and
+  ;; increment the instruction pointer appropriately.
+
+.(
+  inc IP            ; increment IP to next cell (which stores the string)
+  bne continue
+  inc IP+1
+continue
+.)
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+  lda (IP)          ; load the string length
+
+  phx
+  tax               ; X counts down as Y counts up
+;  dex               ; but X is 0-indexed and Y is 1-indexed
+  ldy #1
+
+  ;; now print the next X characters
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (IP),y
+  sta ACIA_DATA
+  iny
+  dex
+  bne next_char
+done
+.)
+
+  plx               ; restore X
+
+  ;; finally, we need up update the IP. we have already incremented it
+  ;; by two. we need to skip Y further bytes but we need to leave the
+  ;; instruction pointer one cell (two bytes) BEFORE its target,
+  ;; since NEXT will increment it. So decrement Y by two before
+  ;; we do the addition.
+  dey
+  dey
+  tya
+  clc
+  adc IP
+  sta IP
+  lda IP+1
+  adc #$0
+  sta IP+1
+.)
+
+  jmp next
+
+
+;;; Read text from the input buffer up until a single quote mark
+;;; and assemble it onto the PAD. At the end, we'll have a string
+;;; that is both counted and null-terminated.
+assemblestr
+
   ;; first, set up the PAD ptr
   lda #<PAD
   sta PADPTR
   lda #>PAD
   sta PADPTR+1
 
+.(
   ;; read the next word into WORD
 continue
   jsr readnext
@@ -1199,11 +1340,13 @@ assemble
   lda #$20          ; space
   sta (PADPTR)
   ldy WORD          ; the character count
+.(
 nextchar
   lda WORD,y
   sta (PADPTR),y    ; Y is off-by-one but it's okay (leading space)
   dey
   bne nextchar
+.)
 
   ;; update PADPTR
   lda WORD          ; length of this most recent word
@@ -1215,37 +1358,21 @@ nextchar
   adc #0            ; in case we generated a carry...
   sta PADPTR+1
 
-  bra continue
+  ;; update count
+  sec               ; BUG this will stop working if PAD crosses word boundary
+  lda PADPTR
+  sbc #<PAD
+  dec               ; subtract one (don't count the count byte itself)
+  sta PAD
 
+  bra continue
+.)
 finished
   ;; add a null at the end of the string
   lda #$00
   sta (PADPTR)
 
-  ;; we've finished the string, so print it
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda PAD,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
-
-  jmp next
-
-nointerp
-  ;; regular execution (case 2)
-.)
-
-  jmp next
-
+  rts
 
 ;;;
 ;;; TEXT INTERPRETER
