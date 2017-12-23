@@ -17,7 +17,7 @@
 ;;; Version history:
 ;;; v01  first basic version of interpreter up and running
 ;;; v02  adding R-stack operators, variables, arrays, allot.
-;;; v03  first steps in compiler
+;;; v03  first steps for compiler, basic lists, strings.
 
 
   * = $0300
@@ -1257,6 +1257,15 @@ nointerp
   ;; increment the instruction pointer appropriately.
 
 .(
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda #$20          ; print a space to begin
+  sta ACIA_DATA
+.)
+
+.(
   inc IP            ; increment IP to next cell (which stores the string)
   bne continue
   inc IP+1
@@ -1268,14 +1277,13 @@ continue
   inc IP+1
 continue
 .)
-  lda (IP)          ; load the string length
 
-  phx
-  tax               ; X counts down as Y counts up
-;  dex               ; but X is 0-indexed and Y is 1-indexed
+  phx               ; save X, since we're about to use it
+  lda (IP)          ; load the string length
+  tax               ; transfer to X. X counts down as Y counts up
   ldy #1
 
-  ;; now print the next X characters
+  ;; now print X characters 
 .(
 next_char
 wait_txd_empty  
@@ -1292,28 +1300,26 @@ done
 
   plx               ; restore X
 
-  ;; finally, we need up update the IP. we have already incremented it
-  ;; by two. we need to skip Y further bytes but we need to leave the
-  ;; instruction pointer one cell (two bytes) BEFORE its target,
-  ;; since NEXT will increment it. So decrement Y by two before
-  ;; we do the addition.
-  dey
-  dey
-  tya
+  ;; finally, update the instruction pointer
+
+  dey               ; dec Y by two to account for the increment
+  dey               ; to IP that we made at the start.
+  tya               ; transfer Y to A and add it to IP
   clc
-  adc IP
+  adc IP            ; LSB
   sta IP
   lda IP+1
-  adc #$0
+  adc #$0           ; MSB (for carry)
   sta IP+1
 .)
 
-  jmp next
+  jmp next          ; continue to the next instruction
 
 
 ;;; Read text from the input buffer up until a single quote mark
 ;;; and assemble it onto the PAD. At the end, we'll have a string
-;;; that is both counted and null-terminated.
+;;; that is both counted and null-terminated. This is used in both
+;;; compile mode and run mode of dotquote.
 assemblestr
 
   ;; first, set up the PAD ptr
@@ -1373,6 +1379,7 @@ finished
   sta (PADPTR)
 
   rts
+
 
 ;;;
 ;;; TEXT INTERPRETER
