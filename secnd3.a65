@@ -164,27 +164,27 @@ d2code
   .word dotimes
 
 d3entry
-  .byte 4
-  .byte "test"
+  .byte 7
+  .byte "0branch"
 d3link
   .word d2entry
+zerobracode
 d3code
-  .word dolist
-d3param
-  .word d2code
-  .word d1code
-  .word d0code
+  .word dozerobra
 
 d4entry
   .byte 4
-  .byte "meta"
+  .byte "test"
 d4link
   .word d3entry
 d4code
   .word dolist
 d4param
-  .word d3code
-  .word d3code
+  .word zerobracode
+  .word $0008
+  .word dotquotecode
+  .byte 3
+  .byte "yes"
   .word d0code
 
 d5entry
@@ -471,7 +471,6 @@ d38link
 d38code
   .word dorcopy
 
-dtop
 d39entry
   .byte %00100010   ; IMM flag plus count of two
   .byte $2e, $22    ; dot, quote (.")
@@ -480,6 +479,23 @@ d39link
 dotquotecode
 d39code
   .word dodotqu
+
+d40entry
+  .byte %00100010   ; IMM flag plus count of two
+  .byte "if"
+d40link
+  .word d39entry
+d40code
+  .word doif
+
+dtop
+d41entry
+  .byte %00100100   ; IMM flag plus count of four
+  .byte "then"
+d41link
+  .word d40entry
+d41code
+  .word dothen
 
 
 ;; TOP OF DICTIONARY
@@ -1385,6 +1401,130 @@ finished
   rts
 
 
+;;; 0branch is an internal word used for conditionals. Test top of stack,
+;;; and if false, add the next parameter (ie instruction offset) to the
+;;; IP.
+dozerobra
+  jsr pop16         ; pull value off the top of the stack
+  lda stackaccess   ; test for zero
+  bne nonzero
+  lda stackaccess+1
+  bne nonzero
+zero
+  lda (IP)          ; now load the offset and put it at SCRATCH+2
+  sta SCRATCH+2
+  ldy #1  
+  lda (IP),y
+  sta SCRATCH+3
+
+  clc               ; now add the offset to the IP
+  lda SCRATCH+2
+  adc IP
+  sta IP
+  lda SCRATCH+3
+  adc IP+1
+  sta IP+1
+
+  jmp next
+
+nonzero
+
+  ;; we will continue with processing, but first, increment IP
+  ;; so as to skip the branch offset.
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+
+  jmp next          ; all done, proceed to next instruction
+
+
+;;; doif is an immediate word that compiles IF.
+;;; compile it into a 0bra, and put the address of the branch word
+;;; onto the stack. Pesume that THEN will later come back
+;;; and fix up the address
+doif
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  lda #<zerobracode
+  sta (DP)
+  ldy #1
+  lda #>zerobracode
+  sta (DP),y
+
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+  lda DP
+  sta stackaccess
+  lda DP+1
+  sta stackaccess+1
+  jsr push16
+
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+
+nocompile
+  jmp next
+.)
+
+
+dothen
+  ;; take the current DP pointer, and subtract from it the value on
+  ;; the stack. The result is the offset that should be stored in
+  ;; the word pointed to by the item on the stack. Pop it from the stack.
+
+  jsr pop16         ; pop branch address into stackaccess
+
+  sec               ; calculate offset
+  lda DP
+  sbc stackaccess
+  sta SCRATCH
+  lda DP+1
+  sbc stackaccess+1
+  sta SCRATCH+1
+
+  lda SCRATCH       ; write it into the branch instruction
+  sta (stackaccess)
+  ldy #1
+  lda SCRATCH+1
+  sta (stackaccess),y
+
+  jsr next          ; done. proceed to next instruction.
+
+  
 ;;;
 ;;; TEXT INTERPRETER
 ;;;
