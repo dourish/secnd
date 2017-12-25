@@ -456,21 +456,29 @@ d36code
   .word dofromr
 
 d37entry
-  .byte 1
-  .byte "r"
+  .byte 2
+  .byte "r@"
 d37link
   .word d36entry
 d37code
   .word dorcopy
 
-dtop
 d38entry
-  .byte %00100010   ; IMM flag plus count of two
-  .byte $2e, $22    ; dot, quote (.")
+  .byte 1
+  .byte "i"
 d38link
   .word d37entry
-dotquotecode
 d38code
+  .word dorcopy
+
+dtop
+d39entry
+  .byte %00100010   ; IMM flag plus count of two
+  .byte $2e, $22    ; dot, quote (.")
+d39link
+  .word d38entry
+dotquotecode
+d39code
   .word dodotqu
 
 
@@ -501,6 +509,7 @@ dummycode
   .word dolist      ; won't actually run this, start with NEXT instead
 dummyparam
   .word $0000       ; will write in the actual code link word here
+dummyexit
   .word doquitcode
 
 
@@ -539,36 +548,57 @@ dolist
   ;; here to save some loads/stores and a JSR. Old code is left in
   ;; comments as documentation.
   lda IP
-  ;sta stackaccess
   sta (RP)
   inc RP
   lda IP+1
-  ;sta stackaccess+1
   sta (RP)
   inc RP
-  ;jsr rpush         ; push onto the return stack
 
-  ;; next, grab the address stored at the location signaled by
-  ;; the instruction pointer (ie, doubly-indirect through IP) and
-  ;; store it back in IP
-  lda (IP)
-  sta SCRATCH
-  ldy #1
-  lda (IP),y
-  sta IP+1
-  lda SCRATCH
+  ;; next, grab the first address in the parameter block for this
+  ;; colon-defined word. We know that XT points to the code word.
+  ;; so we grab that address and then add one cell (two bytes)
+  ;; store this in IP.
+
+  clc
+  lda XT
+  adc #$2
   sta IP
+  lda XT+1
+  adc #0
+  sta IP+1
 
-  ;; IP now points to the CODE word of the defined word we want
-  ;; to execute. So, call NEXT to increment IP and execute
+; DELETE THIS LATER
+;  lda (IP)
+;  sta SCRATCH
+;  ldy #1
+;  lda (IP),y
+;  sta IP+1
+;  lda SCRATCH
+;  sta IP
+
+  ;; IP now points to the next isntruction we want to execute, in
+  ;; this word. Proceed to execute it.
   ;jmp next         ; commented out because we can just fall through
 
 ;;; ** PUT NOTHING HERE... depending on fall-through from DOLIST to NEXT!
 
-;;; NEXT moves to the next instruction in the sequence defined in
-;;; a colon-defined word. Increments the instruction pointer, loads
-;;; what it points to into a defined place, and then does the jump.
+;;; NEXT executes the next word. Before it does the jump, it increments
+;;; IP so that IP always designates the next word to be executed.
 next
+  ldy #0            ; IP points to the location storing the next
+  lda (IP),y        ; word we need to execute. fetch that location,
+  sta XT            ; and store it in XT.
+  iny
+  lda (IP),y
+  sta XT+1
+
+  lda (XT),y        ; TMP contains a pointer to a code word. Load
+  sta CODEVEC+1     ; the code address stored there into CODEVEC.
+  dey
+  lda (XT)
+  sta CODEVEC
+
+  ;; increment IP before we move on
 .(
   inc IP            ; lower byte first
   bne continue      ; skip upper byte if we haven't rolled over
@@ -581,18 +611,6 @@ continue
   inc IP+1
 continue
 .)
-  ldy #0            ; IP now points to the location storing the next
-  lda (IP),y        ; word we need to execute. fetch that location,
-  sta XT            ; and store it in XT.
-  iny
-  lda (IP),y
-  sta XT+1
-
-  lda (XT),y        ; TMP contains a pointer to a code word. Load
-  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-  dey
-  lda (XT)
-  sta CODEVEC
 
   jmp (CODEVEC)     ; execute the code for this instruction/word
 
@@ -799,12 +817,20 @@ dorot
   jmp next
 
 
-;;; DOLIT is a little funky. DOLIT is a word, but it operates on the word
-;;; list of the word from which it is called. So we look on the return stack,
-;;; increment the value by two to advance to the next word, read the
-;;; data at that location, put it on the stack, and then return, letting
-;;; let NEXT advance the IP further.
+;;; DOLIT is the run-time code for literal values. Read the contents of
+;;; the next parameter as a value to be pushed onto the stack.
+;;; We enter with IP indicating the literal value; we increment IP
+;;; by two bytes (one cell) so that skips to the next instruction to be
+;;; executed.
 dolit
+  ldy #0            ; load the value there
+  lda (IP),y
+  sta stackaccess   ; and store in stackaccess
+  iny               ; (now the second byte)
+  lda (IP),y
+  sta stackaccess+1
+  jsr push16        ; add to the data stack
+
 .(
   inc IP            ; increment IP to next cell (which stores the value)
   bne continue
@@ -817,13 +843,6 @@ continue
   inc IP+1
 continue
 .)
-  ldy #0            ; load the value there
-  lda (IP),y
-  sta stackaccess   ; and store in stackaccess
-  iny               ; (now the second byte)
-  lda (IP),y
-  sta stackaccess+1
-  jsr push16        ; add to the data stack
   jmp next
 
 
@@ -1214,12 +1233,12 @@ charloop
 
 nocompile
   ;; are we interactive?
-  ;; we can tell if IP points to dummyparam
+  ;; we can tell if IP points to dummyexit
   lda IP
-  cmp #<dummyparam
+  cmp #<dummyexit
   bne nointerp
   lda IP+1
-  cmp #>dummyparam
+  cmp #>dummyexit
   bne nointerp
 
   ;; Yes, so we need the interactive behaviour (case 3)
@@ -1252,9 +1271,8 @@ done
 
 nointerp
   ;; Finally, this is the regular behavior (case 2). We're executing
-  ;; from a compiled word. So the next byte after that denoted by
-  ;; the instruction pointer is a counted string. Print it, and
-  ;; increment the instruction pointer appropriately.
+  ;; from a compiled word. So IP points to a counted string. Print
+  ;; it, and increment the instruction pointer appropriately.
 
 .(
 wait_txd_empty  
@@ -1263,19 +1281,6 @@ wait_txd_empty
   beq wait_txd_empty
   lda #$20          ; print a space to begin
   sta ACIA_DATA
-.)
-
-.(
-  inc IP            ; increment IP to next cell (which stores the string)
-  bne continue
-  inc IP+1
-continue
-.)
-.(
-  inc IP
-  bne continue
-  inc IP+1
-continue
 .)
 
   phx               ; save X, since we're about to use it
@@ -1301,9 +1306,8 @@ done
   plx               ; restore X
 
   ;; finally, update the instruction pointer
-
-  dey               ; dec Y by two to account for the increment
-  dey               ; to IP that we made at the start.
+  ;; Y is the number of characters plus one (because of the last iny)
+  ;; so that's actually just the right number to add to the IP.
   tya               ; transfer Y to A and add it to IP
   clc
   adc IP            ; LSB
@@ -1550,11 +1554,10 @@ nocompile
   adc #$0
   sta dummyparam+1
 
-  ;; put the dummy parameter address into IP (actually, the code
-  ;; address because NEXT will inc it).
-  lda #<dummycode
+  ;; put the dummy parameter address into IP.
+  lda #<dummyparam
   sta IP
-  lda #>dummycode
+  lda #>dummyparam
   sta IP+1
 
   ;; jump to NEXT to start running it
@@ -1801,59 +1804,6 @@ doneline
   rts
 
 
-
-
-
-;;;
-;;; test harness
-
-gotest
-;;; initialize the stack. 5 on top, then 4, then 2, 2, 2.
-  lda #$02
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jsr push16
-  jsr push16
-  lda #04
-  sta stackaccess
-  jsr push16
-  lda #05
-  sta stackaccess
-  jsr push16
-
-  ;;; load the instruction pointer
-  ;;; pretend we are executing the first "line" of "meta"
-;  lda #<d4code
-;  sta IP
-;  lda #>d4code
-;  sta IP+1
-  ;;; pretend we are executing the first "line" of "meta2"
-  lda #<d8code
-  sta IP
-  lda #>d8code
-  sta IP+1
-
-  ;;; go -- fetch the address indirectly through the IP
-  lda (IP)
-  sta CODEVEC
-  ldy #1
-  lda (IP),y
-  sta CODEVEC+1
-
-  ;; before we jump, reset the IP
-;  lda #<d4param
-;  sta IP
-;  lda #>d4param
-;  sta IP+1
-  lda #<d8param
-  sta IP
-  lda #>d8param
-  sta IP+1
-
-  jmp (CODEVEC)
-
-  ;;; stop
 
 
 
