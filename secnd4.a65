@@ -18,7 +18,8 @@
 ;;; v01  first basic version of interpreter up and running
 ;;; v02  adding R-stack operators, variables, arrays, allot.
 ;;; v03  first steps for compiler, basic lists, strings, loops, conditionals
-
+;;; v04  rounding out vocabulary, linking more internal operations to
+;;;      external words
 
   * = $0300
 
@@ -2630,7 +2631,7 @@ wait_txd_empty
 
 
 hextable:        .byte "0123456789ABCDEF"
-greeting	 .byte "SECND 6502 Forth v03 (Paul Dourish, 2017-12)", $00
+greeting	 .byte "SECND 6502 Forth v04 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
 cantinterpret:   .byte ": not defined", $0d, $0a, $00
