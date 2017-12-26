@@ -488,7 +488,6 @@ d40link
 d40code
   .word doif
 
-dtop
 d41entry
   .byte %00100100   ; IMM flag plus count of four
   .byte "then"
@@ -497,6 +496,22 @@ d41link
 d41code
   .word dothen
 
+d42entry
+  .byte %00100101   ; IMM flag plus count of five
+  .byte "begin"
+d42link
+  .word d41entry
+d42code
+  .word dobegin
+
+dtop
+d43entry
+  .byte %00100101   ; IMM flag plus count of five
+  .byte "until"
+d43link
+  .word d42entry
+d43code
+  .word dountil  
 
 ;; TOP OF DICTIONARY
 
@@ -1403,7 +1418,8 @@ finished
 
 ;;; 0branch is an internal word used for conditionals. Test top of stack,
 ;;; and if false, add the next parameter (ie instruction offset) to the
-;;; IP.
+;;; IP. When we come in, the IP is pointing to the branch address,
+;;; so that is the position from which the offset is to be calculated.
 dozerobra
   jsr pop16         ; pull value off the top of the stack
   lda stackaccess   ; test for zero
@@ -1451,6 +1467,9 @@ continue
 ;;; compile it into a 0bra, and put the address of the branch word
 ;;; onto the stack. Pesume that THEN will later come back
 ;;; and fix up the address
+;;;
+;;; BUG should exit with error if we're not in compile mode
+;;; BUG not testing nesting appropriately
 doif
 .(
   lda STATUS
@@ -1501,7 +1520,18 @@ nocompile
 .)
 
 
+;;; This is the compiler behavior for THEN. We look on the stack for
+;;; address of the branch offset, then calculate the offset and
+;;; write it in.
+;;;
+;;; BUG should exit with error if we're not in compile mode
+;;; BUG not testing nesting appropriately
 dothen
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
   ;; take the current DP pointer, and subtract from it the value on
   ;; the stack. The result is the offset that should be stored in
   ;; the word pointed to by the item on the stack. Pop it from the stack.
@@ -1522,8 +1552,98 @@ dothen
   lda SCRATCH+1
   sta (stackaccess),y
 
+nocompile
   jsr next          ; done. proceed to next instruction.
+.)
 
+
+;;; dobegin is compiler behavior for BEGIN. It simply pushes the current
+;;; DP onto the user stack, so that UNTIL can find it later and use it
+;;; to calculate the offset.
+dobegin
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  lda DP
+  sta stackaccess
+  lda DP+1
+  sta stackaccess+1
+  jsr push16
+
+
+nocompile
+  jmp next
+.)
+
+;;; dountil is the compiler behaviour for UNTIL. It compiles a 0branch
+;;; with the offset calculated from the value left on the stack by
+;;; dobegin.
+dountil
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  ;; first, compile the zerobranch and update DP.
+  lda #<zerobracode
+  sta (DP)
+  ldy #1
+  lda #>zerobracode
+  sta (DP),y
+
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+  ;; pull the address at the start of the loop
+  jsr pop16
+
+  ;; now calculate the offset. Subtract current DP from the value
+  ;; on the stack. Result is negative number (the branch backwards).
+  sec
+  lda stackaccess
+  sbc DP
+  sta SCRATCH
+  lda stackaccess+1
+  sbc DP+1
+  sta SCRATCH+1
+
+  ;; now write that in as a parameter to the branch.
+  ;; BUG lots of needless reads and writes going on here
+  lda SCRATCH
+  sta (DP)
+  ldy #1
+  lda SCRATCH+1
+  sta (DP),y
+
+  ;; increment DP again
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+nocompile
+  jmp next
+.)
   
 ;;;
 ;;; TEXT INTERPRETER
