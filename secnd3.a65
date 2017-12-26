@@ -35,8 +35,8 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0080 through 00FF is operand stack
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
-;;; 0300 through 0FFF is the interpreter and compiler code (this file)
-;;; 1100 through 77FF is user dictionary space
+;;; 0300 through 11FF is the interpreter and compiler code (this file)
+;;; 1200 through 77FF is user dictionary space
 ;;; 7800 through 7DFF is CURRENTLY UNASSIGNED
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
@@ -113,10 +113,10 @@ coldstart
   lda #>dtop
   sta DT+1  
 
-  ;; Initialize DP to the first available dictionary space ($1100)
+  ;; Initialize DP to the first available dictionary space ($1200)
   lda #$00
   sta DP
-  lda #$11
+  lda #$12
   sta DP+1
 
   ;; jump to text interpreter
@@ -517,7 +517,6 @@ d44link
 d44code
   .word doelse
 
-dtop
 d45entry
   .byte 5
   .byte "words"
@@ -526,6 +525,40 @@ d45link
 d45code
   .word dowords
 
+d46entry
+  .byte %00100010   ; IMM plus count of two
+  .byte "do"
+d46link
+  .word d45entry
+d46code
+  .word dodo
+
+d47entry
+  .byte 4
+  .byte "(do)"
+d47link
+  .word d46entry
+parendocode
+d47code
+  .word doparendo
+
+d48entry
+  .byte %00100100   ; IMM plus count of four
+  .byte "loop"
+d48link
+  .word d47entry
+d48code
+  .word doloop
+
+dtop
+d49entry
+  .byte 6
+  .byte "(loop)"
+d49link
+  .word d48entry
+parenloopcode
+d49code
+  .word doparenloop
 
 ;; TOP OF DICTIONARY
 
@@ -1764,6 +1797,221 @@ skip
 nocompile
   jmp next
 .)
+
+
+;;; dodo is the compiler behavior for DO (the runtime behavior is
+;;; doparendo). It compiles in (do) and then pushes the next instruction
+;;; address (the loop target) onto the stack.
+dodo
+  ;; compile (do)
+  lda #<parendocode
+  sta (DP)
+  ldy #1
+  lda #>parendocode
+  sta (DP),y
+
+  ;; increment DP
+.(
+  inc DP
+  bne continue
+  inc DP+1
+continue
+.)
+.(
+  inc DP
+  bne continue
+  inc DP+1
+continue
+.)
+
+  ;; push this address on the stack
+  lda DP
+  sta stackaccess
+  lda DP+1
+  sta stackaccess+1
+  jsr push16
+
+  jmp next          ; done!
+
+
+;;; doparendo is the implementation of (DO), the run-time behavior for
+;;; DO. It pulls two values off the data stack (the loop limit and the
+;;; loop index) and places them on the return stack (in inverted order).
+;;; BUG i could unroll this and it would be much more efficient.
+doparendo
+  jsr pop16         ; pop loop index
+  lda stackaccess   ; stash it for a moment
+  sta SCRATCH
+  lda stackaccess+1
+  sta SCRATCH+1
+  jsr pop16         ; pop loop limit
+  jsr rpush         ; push it onto the return stack
+  lda SCRATCH       ; retreive the caches loop index
+  sta stackaccess
+  lda SCRATCH+1
+  sta stackaccess+1
+  jsr rpush         ; push it
+  jmp next          ; done  
+
+
+;;; doloop is the compiler behavior for LOOP. It compiles (LOOP) and a
+;;; branch address to the address left on the stack.
+doloop
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  lda #<parenloopcode
+  sta (DP)
+  ldy #1
+  lda #>parenloopcode
+  sta (DP),y
+
+  ;; increment DP
+.(
+  inc DP
+  bne continue
+  inc DP+1
+continue
+.)
+.(
+  inc DP
+  bne continue
+  inc DP+1
+continue
+.)
+
+  ;; now compile in the branch offset. first,
+  ;; pull the address at the start of the loop
+  jsr pop16
+
+  ;; now calculate the offset. Subtract current DP from the value
+  ;; on the stack. Result is negative number (the branch backwards).
+  sec
+  lda stackaccess
+  sbc DP
+  sta SCRATCH
+  lda stackaccess+1
+  sbc DP+1
+  sta SCRATCH+1
+
+  ;; now write that in as a parameter to the branch.
+  ;; BUG lots of needless reads and writes going on here
+  lda SCRATCH
+  sta (DP)
+  ldy #1
+  lda SCRATCH+1
+  sta (DP),y
+
+  ;; increment DP again
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+.(
+  inc DP
+  bne skip
+  inc DP+1
+skip
+.)
+
+nocompile
+  jmp next
+.)
+
+
+;;; doparenloop implements (LOOP), which is the run-time code for LOOP.
+;;; increment and test index and optionally branch back to address
+;;; provided.
+doparenloop
+  ;; grab the index from RP and stash it at SCRATCH
+  dec RP
+  lda (RP)
+  sta SCRATCH+1
+  dec RP
+  lda (RP)
+  sta SCRATCH
+
+  ;; increment it
+.(
+  inc SCRATCH
+  bne continue
+  inc SCRATCH+1
+continue
+.)
+
+  ;; grab the loop limit and stash it in SCRATCH+2/3.
+  dec RP
+  lda (RP)
+  sta SCRATCH+3
+  dec RP
+  lda (RP)
+  sta SCRATCH+2
+
+  ;; compare it to the loop limit. if it's greater than or equal to,
+  ;; we will leave the loop.
+  lda SCRATCH+1
+  cmp SCRATCH+3
+  bmi takeloop      ; bmi means that +3 (limit) is greater than +1 (index)
+  beq testlsb       ; eq means we need to test further
+  bra noloop        ; otherwise, index is greater than limit, so we're done
+
+testlsb             ; we get here only if MSBs are equal
+  lda SCRATCH
+  cmp SCRATCH+2
+  bmi takeloop      ; index still less than limit, so we take the loop
+  bra noloop        ; otherwise, quit the loop
+
+
+takeloop
+  ;; put index and limit back on return stack. (for limit, just inc
+  ;; RP, becuase it hasn't changed
+  inc RP
+  inc RP
+  lda SCRATCH
+  sta (RP)
+  inc RP
+  lda SCRATCH+1
+  sta (RP)
+  inc RP
+
+  ;; grab the branch address and add it to IP
+  lda (IP)          ; now load the offset and put it at SCRATCH+2
+  sta SCRATCH+2
+  ldy #1  
+  lda (IP),y
+  sta SCRATCH+3
+
+  clc               ; now add the offset to the IP
+  lda SCRATCH+2
+  adc IP
+  sta IP
+  lda SCRATCH+3
+  adc IP+1
+  sta IP+1
+
+  jmp next
+
+
+noloop
+  ;; we've already removed the values from the return stack
+  ;; we need to update IP to skip the branch address
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+.(
+  inc IP
+  bne continue
+  inc IP+1
+continue
+.)
+  jmp next
 
 
 ;;; dowords. Print out the words defined in the dictionary (including
