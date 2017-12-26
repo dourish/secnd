@@ -1677,9 +1677,9 @@ dobegin
   bit #COMPILE
   beq nocompile
 
-  lda SCRATCH
+  lda DP
   sta stackaccess
-  lda SCRATCH+1
+  lda DP+1
   sta stackaccess+1
   jsr push16
 
