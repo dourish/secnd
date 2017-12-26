@@ -509,7 +509,6 @@ d43link
 d43code
   .word dountil  
 
-dtop
 d44entry
   .byte %00100100   ; IMM plus count of four
   .byte "else"
@@ -517,6 +516,16 @@ d44link
   .word d43entry
 d44code
   .word doelse
+
+dtop
+d45entry
+  .byte 5
+  .byte "words"
+d45link
+  .word d44entry
+d45code
+  .word dowords
+
 
 ;; TOP OF DICTIONARY
 
@@ -1755,6 +1764,65 @@ skip
 nocompile
   jmp next
 .)
+
+
+;;; dowords. Print out the words defined in the dictionary (including
+;;; variables).
+dowords
+.(
+  jsr crlf
+
+  ;; set up search by initializing dictionary pointer. reuse the
+  ;; same pointer (DPTR) used in matching (tick).
+  lda DT
+  sta DPTR
+  lda DT+1
+  sta DPTR+1
+
+nextentry
+  ;; have we run out of dictionary entries? (when DPTR is $0000)
+  lda DPTR
+  bne printit
+  lda DPTR+1
+  beq done
+
+printit
+  ldy #0
+  lda (DPTR),y
+  and #%00011111    ; mask off the tags
+  phx
+  tax
+  ldy #1
+nextchar
+  lda (DPTR),y
+  jsr puta
+  iny
+  dex
+  bne nextchar
+
+  lda #$20          ; end with a space
+  jsr puta
+  plx
+
+  ;; move on to the next entry
+  ;;
+  lda (DPTR)        ; get word length...
+  and #%00011111    ; mask off the tags
+  tay               ; store in Y, and add one...
+  iny               ; for the pointer to the next entry
+  lda (DPTR),y      ; update DPTR to point to next entry
+  sta SCRATCH
+  iny
+  lda (DPTR),y  
+  sta DPTR+1
+  lda SCRATCH
+  sta DPTR
+  bra nextentry
+
+done
+  jmp next
+.)
+
   
 ;;;
 ;;; TEXT INTERPRETER
