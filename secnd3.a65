@@ -36,7 +36,7 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 0FFF is the interpreter and compiler code (this file)
-;;; 1000 through 77FF is user dictionary space
+;;; 1100 through 77FF is user dictionary space
 ;;; 7800 through 7DFF is CURRENTLY UNASSIGNED
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
@@ -113,10 +113,10 @@ coldstart
   lda #>dtop
   sta DT+1  
 
-  ;; Initialize DP to the first available dictionary space ($1000)
+  ;; Initialize DP to the first available dictionary space ($1100)
   lda #$00
   sta DP
-  lda #$10
+  lda #$11
   sta DP+1
 
   ;; jump to text interpreter
