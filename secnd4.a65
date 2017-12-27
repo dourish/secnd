@@ -585,7 +585,6 @@ d52link
 d52code
   .word doj
 
-dtop
 d53entry
   .byte 1
   .byte "k"
@@ -593,6 +592,64 @@ d53link
   .word d52entry
 d53code
   .word dok
+
+d54entry
+  .byte 3
+  .byte "max"
+d54link
+  .word d53entry
+d54code
+  .word domax
+
+d55entry
+  .byte 3
+  .byte "min"
+d55link
+  .word d54entry
+d55code
+  .word domin
+
+d56entry
+  .byte 3
+  .byte "key"
+d56link
+  .word d55entry
+d56code
+  .word dokey
+
+d57entry
+  .byte 3
+  .byte "and"
+d57link
+  .word d56entry
+d57code
+  .word doand
+
+d58entry
+  .byte 2
+  .byte "or"
+d58link
+  .word d57entry
+d58code
+  .word door
+
+d59entry
+  .byte 3
+  .byte "xor"
+d59link
+  .word d58entry
+d59code
+  .word doxor
+
+dtop
+d60entry
+  .byte 2
+  .byte "0="
+d60link
+  .word d59entry
+d60code
+  .word doeqlzero
+
 
 ;; TOP OF DICTIONARY
 
@@ -1189,6 +1246,7 @@ dotor
   jsr pop16
   jsr rpush
   jmp next
+
 
 ;; dofromr (for Forth word "R>" -- move from r-stack to top of stack
 ;;;
@@ -2123,7 +2181,151 @@ done
   jmp next
 .)
 
+
+;;; implements MAX
+domax
+.(
+  ;; compare most significant bytes
+  lda stackbase+2,x
+  cmp stackbase+4,x
+  beq testother
+  bpl topofstack
+  bra nextonstack
   
+  ;; only in the case where they were equal, test less significant
+testother
+  lda stackbase+1,x
+  cmp stackbase+3,x
+  bmi nextonstack
+
+  ;; item on the top of the stack was larger. copy it over
+  ;; lower item, and pop top item off
+topofstack
+  lda stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+  ;; and just fall through to the pop below
+
+  ;; lower item on stack is max. just pop off the top.
+nextonstack
+  inx
+  inx
+.)
+
+donemax
+  jmp next
+
+
+;;; implements MIN
+domin
+.(
+  ;; compare most significant bytes
+  lda stackbase+2,x
+  cmp stackbase+4,x
+  beq testother
+  bmi topofstack
+  bra nextonstack
+  
+  ;; only in the case where they were equal, test less significant
+testother
+  lda stackbase+1,x
+  cmp stackbase+3,x
+  bpl nextonstack
+
+  ;; item on the top of the stack was larger. copy it over
+  ;; lower item, and pop top item off
+topofstack
+  lda stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+  ;; and just fall through to the pop below
+
+  ;; lower item on stack is max. just pop off the top.
+nextonstack
+  inx
+  inx
+.)
+
+donemin
+  jmp next
+
+
+;;; implements KEY -- read a character from the terminal and
+;;; leave its ascii value on the stack
+dokey
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+
+  jmp next
+
+
+;;; AND, OR, XOR
+;;;
+doand
+  lda stackbase+1,x
+  and stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  and stackbase+4,x
+  sta stackbase+4,x
+  inx
+  inx
+  jmp next
+
+door
+  lda stackbase+1,x
+  ora stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  ora stackbase+4,x
+  sta stackbase+4,x
+  inx
+  inx
+  jmp next
+
+doxor  
+  lda stackbase+1,x
+  eor stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  eor stackbase+4,x
+  sta stackbase+4,x
+  inx
+  inx
+  jmp next
+
+
+;;; implements 0=. Faster than "0 =" and works in place.
+
+doeqlzero
+.(
+  lda stackbase+1,x ; test for zero
+  ora stackbase+2,x
+  beq iszero        ; yes?
+
+  stz stackbase+1,x ; no... so we write in zero (for false)
+  bra done
+
+iszero              ; yes it's zero
+  lda #1            ; so we return 1 (for true)
+  sta stackbase+1,x
+
+done
+  stz stackbase+2,x ; this byte is always zero, either way
+.)
+  jmp next
+
 ;;;
 ;;; TEXT INTERPRETER
 ;;;
