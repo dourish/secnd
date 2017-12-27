@@ -560,13 +560,30 @@ parenloopcode
 d49code
   .word doparenloop
 
-dtop
 d50entry
-  .byte 1
-  .byte "j"
+  .byte %00100101   ; IMM plus count of five
+  .byte "+loop"
 d50link
   .word d49entry
 d50code
+  .word doplusloop
+
+d51entry
+  .byte 7
+  .byte "(+loop)"
+d51link
+  .word d50entry
+parplusloopcode
+d51code
+  .word doparplusloop
+
+dtop
+d52entry
+  .byte 1
+  .byte "j"
+d52link
+  .word d51entry
+d52code
   .word doj
 
 ;; TOP OF DICTIONARY
@@ -1483,48 +1500,28 @@ finished
 dozerobra
   jsr pop16         ; pull value off the top of the stack
   lda stackaccess   ; test for zero
-  bne nonzero
-  lda stackaccess+1
-  bne nonzero
-zero
-  lda (IP)          ; now load the offset and put it at SCRATCH+2
-  sta SCRATCH+2
-  ldy #1  
-  lda (IP),y
-  sta SCRATCH+3
-
-  clc               ; now add the offset to the IP
-  lda SCRATCH+2
-  adc IP
-  sta IP
-  lda SCRATCH+3
-  adc IP+1
-  sta IP+1
-
-  jmp next
+  ora stackaccess+1
+  beq dobranch      ; if it's zero, then jump to branch code
 
 nonzero
-
-  ;; we will continue with processing, but first, increment IP
-  ;; so as to skip the branch offset.
+  ;; otherwise we will continue with processing, but first,
+  ;; increment IP to skip the branch offset.
 .(
-  inc IP
-  bne continue
+  clc
+  lda IP
+  adc #2
+  sta IP
+  bcc skipmsb
   inc IP+1
-continue
-.)
-.(
-  inc IP
-  bne continue
-  inc IP+1
-continue
+skipmsb
 .)
 
   jmp next          ; all done, proceed to next instruction
 
 
 ;;; dobranch is used by ELSE; does an immediate branch. So, it's just
-;;; like 0branch if the top stack value is 0.
+;;; like 0branch if the top stack value is 0; in fact, 0branch calls
+;;; this code in that case
 dobranch
   lda (IP)          ; now load the offset and put it at SCRATCH+2
   sta SCRATCH+2
@@ -1541,6 +1538,7 @@ dobranch
   sta IP+1
 
   jmp next
+
 
 ;;; doif is an immediate word that compiles IF.
 ;;; compile it into a 0bra, and put the address of the branch word
@@ -1851,10 +1849,9 @@ doparendo
 ;;; doloop is the compiler behavior for LOOP. It compiles (LOOP) and a
 ;;; branch address to the address left on the stack.
 doloop
-.(
   lda STATUS
   bit #COMPILE
-  beq nocompile
+  beq quitdoloop
 
   lda #<parenloopcode
   sta (DP)
@@ -1862,6 +1859,7 @@ doloop
   lda #>parenloopcode
   sta (DP),y
 
+loopcompile
   ;; increment DP
 .(
   clc
@@ -1906,10 +1904,51 @@ skipmsb
 skipmsb
 .)
 
+quitdoloop
+  jmp next
+
+;;; doplusloop implements the compiler behavior for +LOOP. Basically,
+;;; it writes in a differnt code address but then jumps into the LOOP
+;;; code to do all the calculations of offsets, etc.
+doplusloop
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
+  lda #<parplusloopcode
+  sta (DP)
+  ldy #1
+  lda #>parplusloopcode
+  sta (DP),y
+  bra loopcompile
+
 nocompile
   jmp next
 .)
 
+;;; doparplusloop implements (+LOOP), the runtime code for +LOOP.
+;;; much of this will be shared with (LOOP), except that we start
+;;; by pulling a value from the stack to do increment.
+doparplusloop
+  ;; grab the index from RP and stash it at SCRATCH
+  dec RP
+  lda (RP)
+  sta SCRATCH+1
+  dec RP
+  lda (RP)
+  sta SCRATCH
+
+  jsr pop16         ; pull the increment value
+  clc               ; and add it to the value in SCRATCH
+  lda SCRATCH
+  adc stackaccess
+  sta SCRATCH
+  lda SCRATCH+1
+  adc stackaccess+1
+  sta SCRATCH+1
+
+  jmp testandloop   ; jump to the code that we share with doparenloop
 
 ;;; doparenloop implements (LOOP), which is the run-time code for LOOP.
 ;;; increment and test index and optionally branch back to address
@@ -1931,6 +1970,7 @@ doparenloop
 continue
 .)
 
+testandloop         ; also entry point for (+LOOP)
   ;; grab the loop limit and stash it in SCRATCH+2/3.
   dec RP
   lda (RP)
