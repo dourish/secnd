@@ -640,7 +640,6 @@ d59link
 d59code
   .word doxor
 
-dtop
 d60entry
   .byte 2
   .byte "0="
@@ -648,6 +647,39 @@ d60link
   .word d59entry
 d60code
   .word doeqlzero
+
+d61entry
+  .byte 2
+  .byte "1+"
+d61link
+  .word d60entry
+d61code
+  .word do1plus
+
+d62entry
+  .byte 2
+  .byte "1-"
+d62link
+  .word d61entry
+d62code
+  .word do1minus
+
+d63entry
+  .byte 2
+  .byte "2+"
+d63link
+  .word d62entry
+d63code
+  .word do2plus
+
+dtop
+d64entry
+  .byte 2
+  .byte "2-"
+d64link
+  .word d63entry
+d64code
+  .word do2minus
 
 
 ;; TOP OF DICTIONARY
@@ -2324,6 +2356,56 @@ done
   stz stackbase+2,x ; this byte is always zero, either way
 .)
   jmp next
+
+
+;;; 1+, 1-, 2+, 2-
+;;;
+do1plus
+.(
+  clc
+  inc stackbase+1,x
+  bne done
+  inc stackbase+2,x
+done
+  jmp next
+.)
+
+do1minus
+.(
+  sec
+  lda stackbase+1,x
+  sbc #1
+  sta stackbase+1,x
+  bcs done
+  dec stackbase+2,x
+done
+  jmp next
+.)
+
+do2plus
+.(
+  clc
+  lda stackbase+1,x
+  adc #2
+  sta stackbase+1,x
+  bcc done
+  inc stackbase+2,x
+done
+  jmp next
+.)
+
+do2minus
+.(
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  bcs done
+  dec stackbase+2,x
+done
+  jmp next
+.)
+
 
 ;;;
 ;;; TEXT INTERPRETER
