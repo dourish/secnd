@@ -577,7 +577,6 @@ parplusloopcode
 d51code
   .word doparplusloop
 
-dtop
 d52entry
   .byte 1
   .byte "j"
@@ -585,6 +584,15 @@ d52link
   .word d51entry
 d52code
   .word doj
+
+dtop
+d53entry
+  .byte 1
+  .byte "k"
+d53link
+  .word d52entry
+d53code
+  .word dok
 
 ;; TOP OF DICTIONARY
 
@@ -1134,25 +1142,43 @@ dorcopy
   jsr push16
   jmp next
 
-;;; j copies inner loop value (basically, third item down on the return
-;;; stack)
+
+;;; j copies immediately outer loop value (basically, third item down
+;;; on the return stack)
 doj
-  dec RP            ; temporarily jump down a few spots
-  dec RP
-  dec RP
-  dec RP
-  dec RP
-  lda (RP)
-  sta stackaccess+1
-  dec RP
-  lda (RP)
+  sec
+  lda RP
+  sbc #6            ; 6 bytes = 3 spots down
+  sta SCRATCH
+  lda RP+1          ; return stack all on one page so
+  sta SCRATCH+1     ; no subtraction
+
+  lda (SCRATCH)
   sta stackaccess
-  inc RP            ; now restore the return stack pointer
-  inc RP
-  inc RP
-  inc RP
-  inc RP
-  inc RP
+  ldy #1
+  lda (SCRATCH),y
+  sta stackaccess+1
+
+  jsr push16
+  jmp next
+
+
+;;; k copies second outer loop value (basically, fifth item down
+;;; on the return stack)
+dok
+  sec
+  lda RP
+  sbc #10           ; 10 bytes = 5 spots down
+  sta SCRATCH
+  lda RP+1          ; return stack always on same page
+  sta SCRATCH+1
+
+  lda (SCRATCH)
+  sta stackaccess
+  ldy #1
+  lda (SCRATCH),y
+  sta stackaccess+1
+
   jsr push16
   jmp next
 
