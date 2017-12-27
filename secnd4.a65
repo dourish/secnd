@@ -551,7 +551,6 @@ d48link
 d48code
   .word doloop
 
-dtop
 d49entry
   .byte 6
   .byte "(loop)"
@@ -560,6 +559,15 @@ d49link
 parenloopcode
 d49code
   .word doparenloop
+
+dtop
+d50entry
+  .byte 1
+  .byte "j"
+d50link
+  .word d49entry
+d50code
+  .word doj
 
 ;; TOP OF DICTIONARY
 
@@ -624,8 +632,7 @@ dolist
   ;; first, push the current instruction pointer onto the
   ;; return stack
   ;; NB-- this was previously done via jsr rpush but I unrolled it
-  ;; here to save some loads/stores and a JSR. Old code is left in
-  ;; comments as documentation.
+  ;; here to save some loads/stores and a JSR.
   lda IP
   sta (RP)
   inc RP
@@ -637,7 +644,6 @@ dolist
   ;; colon-defined word. We know that XT points to the code word.
   ;; so we grab that address and then add one cell (two bytes)
   ;; store this in IP.
-
   clc
   lda XT
   adc #$2
@@ -645,15 +651,6 @@ dolist
   lda XT+1
   adc #0
   sta IP+1
-
-; DELETE THIS LATER
-;  lda (IP)
-;  sta SCRATCH
-;  ldy #1
-;  lda (IP),y
-;  sta IP+1
-;  lda SCRATCH
-;  sta IP
 
   ;; IP now points to the next isntruction we want to execute, in
   ;; this word. Proceed to execute it.
@@ -677,16 +674,13 @@ next
   lda (XT)
   sta CODEVEC
 
-  ;; increment IP before we move on
+  ;; increment IP by two bytes (one cell) before we move on
 .(
-  inc IP            ; lower byte first
-  bne continue      ; skip upper byte if we haven't rolled over
-  inc IP+1
-continue
-.)
-.(
-  inc IP            ; now same again, because we need to inc by 2
-  bne continue
+  clc
+  lda IP
+  adc #2
+  sta IP
+  bcc continue
   inc IP+1
 continue
 .)
@@ -846,7 +840,7 @@ dodepth
   sec
   sbc SCRATCH
   clc
-  lsr
+  lsr               ; shift right to divide by two
   stz stackbase,x
   dex
   sta stackbase,x
@@ -911,17 +905,15 @@ dolit
   jsr push16        ; add to the data stack
 
 .(
-  inc IP            ; increment IP to next cell (which stores the value)
-  bne continue
+  clc
+  lda IP            ; increment IP to next cell (which stores the value)
+  adc #2
+  sta IP
+  bcc continue
   inc IP+1
 continue
 .)
-.(
-  inc IP
-  bne continue
-  inc IP+1
-continue
-.)
+
   jmp next
 
 
@@ -934,18 +926,15 @@ dovaddr
   lda XT+1
   sta stackaccess+1
 .(
-  inc stackaccess
-  bne continue
+  clc
+  lda stackaccess   ; add two bytes (one cell) to find param area
+  adc #2
+  sta stackaccess
+  bcc continue
   inc stackaccess+1
 continue
 .)
-.(
-  inc stackaccess
-  bne continue
-  inc stackaccess+1
-continue
-.)
-  jsr push16
+  jsr push16        ; push the address
   jmp next
 
 ;;; dofetch is the code for "@". Pull an address off the stack and
@@ -1054,13 +1043,15 @@ copynext            ; now copy the rest of the word, backwards
   lda DP+1
   sta DT+1
 
+.(
   clc               ; update DP to next available space
   tya               ; by adding bytes consumed to DP
   adc DP
   sta DP
-  lda DP+1
-  adc #0
-  sta DP+1
+  bcc continue
+  inc DP+1
+continue
+.)
  
   jmp next
 
@@ -1113,7 +1104,7 @@ done
 .)
 
 ;;; rcopy (for the Forth word "R") -- copy top of R stack onto data stack
-;;;
+;;; this code also implements I (since it's the same thing).
 dorcopy
   dec RP
   lda (RP)
@@ -1125,6 +1116,29 @@ dorcopy
   inc RP
   jsr push16
   jmp next
+
+;;; j copies inner loop value (basically, third item down on the return
+;;; stack)
+doj
+  dec RP            ; temporarily jump down a few spots
+  dec RP
+  dec RP
+  dec RP
+  dec RP
+  lda (RP)
+  sta stackaccess+1
+  dec RP
+  lda (RP)
+  sta stackaccess
+  inc RP            ; now restore the return stack pointer
+  inc RP
+  inc RP
+  inc RP
+  inc RP
+  inc RP
+  jsr push16
+  jmp next
+
 
 ;; dotor (for the Forth word ">R" -- move from top of stack onto r-stack
 ;;;
@@ -1217,22 +1231,19 @@ dosemic
 
   ;; add call to exit at the end of the entry
   ldy #0
-  lda #<d0code
+  lda #<exitcode
   sta (DP),y
   iny
-  lda #>d0code
+  lda #>exitcode
   sta (DP),y
 
   ;; update DP for those two last bytes
 .(
-  inc DP
-  bne continue
-  inc DP+1
-continue
-.)
-.(
-  inc DP
-  bne continue
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
 continue
 .)
@@ -1272,16 +1283,13 @@ dodotqu
 
   ;; then update DP by 2, to account for that word
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+continue
 .)
 
   ;; next, assemble the string on the PAD
@@ -1387,13 +1395,15 @@ done
   ;; finally, update the instruction pointer
   ;; Y is the number of characters plus one (because of the last iny)
   ;; so that's actually just the right number to add to the IP.
+.(
   tya               ; transfer Y to A and add it to IP
   clc
   adc IP            ; LSB
   sta IP
-  lda IP+1
-  adc #$0           ; MSB (for carry)
-  sta IP+1
+  bcc continue
+  inc IP+1          ; MSB in case of carry
+continue
+.)
 .)
 
   jmp next          ; continue to the next instruction
@@ -1438,14 +1448,16 @@ nextchar
 .)
 
   ;; update PADPTR
+.(
   lda WORD          ; length of this most recent word
   inc               ; plus leading space
   clc
   adc PADPTR
   sta PADPTR        ; update the pointer
-  lda PADPTR+1
-  adc #0            ; in case we generated a carry...
-  sta PADPTR+1
+  bcc skipmsb
+  inc PADPTR+1      ; in case we generated a carry...
+skipmsb
+.)
 
   ;; update count
   sec               ; BUG this will stop working if PAD crosses word boundary
@@ -1549,38 +1561,34 @@ doif
   lda #>zerobracode
   sta (DP),y
 
+  ;; bump DP by two (to move on to the branch address location)
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+continue
 .)
 
+  ;; put that on the stack so that ELSE or THEN can find it later
   lda DP
   sta stackaccess
   lda DP+1
   sta stackaccess+1
   jsr push16
 
+  ;; bump DP by two again (to move to next instruction space)
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
-skip
+continue
 .)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
-.)
-
 
 nocompile
   jmp next
@@ -1648,34 +1656,28 @@ doelse
   sta (DP),y
 
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+continue
 .)
 
-  lda DP
+  lda DP            ; cache this address for a moment
   sta SCRATCH+2
   lda DP+1
   sta SCRATCH+3
 
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+continue
 .)
 
   ;; Next, do the THEN-like behavior and update the address left by IF.
@@ -1748,16 +1750,13 @@ dountil
   sta (DP),y
 
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+skipmsb
 .)
 
   ;; pull the address at the start of the loop
@@ -1783,16 +1782,13 @@ skip
 
   ;; increment DP again
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+skipmsb
 .)
 
 nocompile
@@ -1813,19 +1809,16 @@ dodo
 
   ;; increment DP
 .(
-  inc DP
-  bne continue
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-continue
-.)
-.(
-  inc DP
-  bne continue
-  inc DP+1
-continue
+skipmsb
 .)
 
-  ;; push this address on the stack
+  ;; push this address on the stack as the loop target address
   lda DP
   sta stackaccess
   lda DP+1
@@ -1871,16 +1864,13 @@ doloop
 
   ;; increment DP
 .(
-  inc DP
-  bne continue
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-continue
-.)
-.(
-  inc DP
-  bne continue
-  inc DP+1
-continue
+skipmsb
 .)
 
   ;; now compile in the branch offset. first,
@@ -1907,16 +1897,13 @@ continue
 
   ;; increment DP again
 .(
-  inc DP
-  bne skip
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-skip
-.)
-.(
-  inc DP
-  bne skip
-  inc DP+1
-skip
+skipmsb
 .)
 
 nocompile
@@ -2001,17 +1988,15 @@ noloop
   ;; we've already removed the values from the return stack
   ;; we need to update IP to skip the branch address
 .(
-  inc IP
-  bne continue
+  clc
+  lda IP
+  adc #2
+  sta IP
+  bcc skipmsb
   inc IP+1
-continue
+skipmsb
 .)
-.(
-  inc IP
-  bne continue
-  inc IP+1
-continue
-.)
+
   jmp next
 
 
@@ -2141,8 +2126,9 @@ nextentry
   beq nomatch
 
 compareentry
-  ;; compare words. counted strings can be compared directly, will compare
-  ;; counts first. But we need to mask out the tags in the count.
+  ;; compare words. counted strings can be compared directly;
+  ;; byte by byte will compare counts first. But we need to
+  ;; mask out the tags in the count.
 
   ldy #0
   lda (DPTR),y
@@ -2188,7 +2174,7 @@ gotmatch
   beq nocompile
 
   ;; now check if the word is immediate... because if it is, we should
-  ;; go ahead and execute
+  ;; go ahead and execute it, even if we're compiling
   lda (DPTR)
   bit #IMM
   bne nocompile
@@ -2212,18 +2198,16 @@ gotmatch
   sta (DP),y
 
   ;; increment DP by 2
-  inc DP
 .(
-  bne continue
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
   inc DP+1
-continue
+skipmsb
 .)
-.(
-  inc DP
-  bne continue
-  inc DP+1
-continue
-.)
+
   ;; proceed with the interpreter loop
   jmp interploop
 
