@@ -19,7 +19,7 @@
 ;;; v02  adding R-stack operators, variables, arrays, allot.
 ;;; v03  first steps for compiler, basic lists, strings, loops, conditionals
 ;;; v04  rounding out vocabulary, linking more internal operations to
-;;;      external words
+;;;      external words, adding nest checking
 
   * = $0300
 
@@ -37,7 +37,7 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 12FF is the interpreter and compiler code (this file)
-;;; 1300 through 7DFF is user dictionary space
+;;; 1400 through 7DFF is user dictionary space
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
 ;;; 7F00 through 7FFF is the input buffer (TIB)
@@ -75,10 +75,23 @@ PADPTR=$0063        ; and 0064
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
+USERBASE=$1400      ; space for user code
 
+;;; FLAGS AND CONSTANTS
+;;;
 COMPILE=%00000001   ; status flags
 
 IMM=%00100000       ; flag for IMMEDIATE word (ie executed in compile mode)
+
+;;; The flags below are left on the stack by the compiler to signal
+;;; what sort of clean-up operation is needed at the end of a loop.
+;;; They also ensure that nesting is correct.
+IFELSEFLAG=$FF      ; left by IF and ELSE
+LEAVEFLAG=$FE       ; left by LEAVE
+DOFLAG=$FD          ; left by DO
+BEGINFLAG=$FC       ; left by BEGIN
+WHILEFLAG=$FB       ; left by WHILE
+
 
   jmp coldstart     ; jump past code defined in stack routines
 
@@ -113,10 +126,10 @@ coldstart
   lda #>dtop
   sta DT+1  
 
-  ;; Initialize DP to the first available dictionary space ($1200)
-  lda #$00
+  ;; Initialize DP to the first available dictionary space (USERBASE)
+  lda #<USERBASE
   sta DP
-  lda #$13
+  lda #>USERBASE
   sta DP+1
 
   ;; jump to text interpreter
@@ -218,7 +231,7 @@ d7param
   .word d0code
 
 d8entry
-  .byte %00100110   ; IMM + code for 6
+  .byte %00100110   ; IMM + code for 6  ;; BUG? no need for immediate
   .byte "branch"
 d8link
   .word d7entry
@@ -672,7 +685,6 @@ d63link
 d63code
   .word do2plus
 
-dtop
 d64entry
   .byte 2
   .byte "2-"
@@ -681,6 +693,23 @@ d64link
 d64code
   .word do2minus
 
+d65entry
+  .byte %00100101   ; IMM plus count of 5
+  .byte "leave"
+d65link
+  .word d64entry
+d65code
+  .word doleave
+
+dtop
+d66entry
+  .byte 7
+  .byte "(leave)"
+d66link
+  .word d65entry
+parenleavecode
+d66code
+  .word doparenleave
 
 ;; TOP OF DICTIONARY
 
@@ -691,6 +720,9 @@ d64code
 ;;; execute something; the point of it is to make sure that after we've
 ;;; executed what we want, we run "doquitword", which should take us
 ;;; back into the interpreter loop
+;;;
+;;; Once I have the interpreter loop running in a more standard way,
+;;; this won't be needed.
 ;;;
 
 
@@ -820,7 +852,11 @@ exit
 
 ;;;
 ;;; PRIMITIVES
-;;;
+;;; Individual routines for each instruction. Most of these are
+;;; regular words, whose run-time behaviour is specified here and
+;;; at compile-time are simply written in as addresses to the code
+;;; words in the dictionary. Some have separate compile-time and
+;;; run-time components (e.g. DO and (DO)).
 
 doplus
   jsr add16
@@ -977,7 +1013,7 @@ doover
   jmp next
 
 dorot
-  dex               ; make some new space on the stack
+  dex               ; make some new space on the stack temporarily
   dex
   lda stackbase+7,x ; first, copy the item from three down on the stack
   sta stackbase+1,x ; into the new space
@@ -1008,6 +1044,7 @@ dorot
 ;;; We enter with IP indicating the literal value; we increment IP
 ;;; by two bytes (one cell) so that skips to the next instruction to be
 ;;; executed.
+;;; (wouldn't "(literal)" be a more consistent name for this?)
 dolit
   ldy #0            ; load the value there
   lda (IP),y
@@ -1032,7 +1069,7 @@ continue
 
 ;;; dovaddr is the internal code for variables... look up the current
 ;;; XT and use it to find the address reserved for the variable, and
-;;; push that.
+;;; push that. (Similarly this should perhaps be called "(VARIABLE)").
 dovaddr
   lda XT
   sta stackaccess
@@ -1661,7 +1698,6 @@ dobranch
 ;;; and fix up the address
 ;;;
 ;;; BUG should exit with error if we're not in compile mode
-;;; BUG not testing nesting appropriately
 doif
 .(
   lda STATUS
@@ -1692,6 +1728,12 @@ continue
   sta stackaccess+1
   jsr push16
 
+  ;; add the IFELSEFLAG to the stack
+  lda #IFELSEFLAG
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+
   ;; bump DP by two again (to move to next instruction space)
 .(
   clc
@@ -1713,13 +1755,21 @@ nocompile
 ;;; write it in.
 ;;;
 ;;; BUG should exit with error if we're not in compile mode
-;;; BUG not testing nesting appropriately
 dothen
 .(
   lda STATUS
   bit #COMPILE
   beq nocompile
 
+  ;; pop the flag from the stack and make sure it's an IFELSEFLAG
+  jsr pop16
+  lda stackaccess
+  cmp #IFELSEFLAG
+  beq thenproceed
+
+  jmp abortnest
+
+thenproceed
   ;; take the current DP pointer, and subtract from it the value on
   ;; the stack. The result is the offset that should be stored in
   ;; the word pointed to by the item on the stack. Pop it from the stack.
@@ -1741,7 +1791,7 @@ dothen
   sta (stackaccess),y
 
 nocompile
-  jsr next          ; done. proceed to next instruction.
+  jmp next          ; done. proceed to next instruction.
 .)
 
 
@@ -1750,15 +1800,23 @@ nocompile
 ;;; it compiles in a branch (not 0branch this time) and leaves an address
 ;;; on the stack for THEN to fill in.
 ;;;
-;;; BUG doesn't check nesting
-;;; BIG doesn't check for compiler
+;;; BUG doesn't check for compiler
 doelse
 .(
   lda STATUS
   bit #COMPILE
   beq nocompile
 
-  ;; First, compile in the branch instruction and keep a copy of
+  ;; First, pop the flag off the stack and ensure it's the IFELSEFLAG.
+  jsr pop16
+  lda stackaccess
+  cmp #IFELSEFLAG
+  beq elseproceed
+  jmp abortnest
+  
+elseproceed
+
+  ;; Next, compile in the branch instruction and keep a copy of
   ;; the branch address to be put on the stack in a moment.
   ;; this way, a successful IF clause should hit a branch that causes
   ;; it to jump to the end (skipping the ELSE clause)
@@ -1822,6 +1880,12 @@ continue
   sta stackaccess+1
   jsr push16
 
+  ;;; and replace the flag.
+  lda #IFELSEFLAG
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+
 nocompile
   jmp next
 .)
@@ -1835,12 +1899,18 @@ dobegin
   bit #COMPILE
   beq nocompile
 
+  ;; add the current instruction location to the stack
   lda DP
   sta stackaccess
   lda DP+1
   sta stackaccess+1
   jsr push16
 
+  ;; add a flag to signal that this is for a BEGIN
+  lda #BEGINFLAG
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
 
 nocompile
   jmp next
@@ -1855,7 +1925,15 @@ dountil
   bit #COMPILE
   beq nocompile
 
-  ;; first, compile the zerobranch and update DP.
+  ;; pop the flag off the stack to make sure it's a BEGINFLAG
+  jsr pop16
+  lda stackaccess
+  cmp #BEGINFLAG
+  beq proceed
+  jmp abortnest
+  
+proceed
+  ;; compile the zerobranch and update DP.
   lda #<zerobracode
   sta (DP)
   ldy #1
@@ -1911,7 +1989,7 @@ nocompile
 
 ;;; dodo is the compiler behavior for DO (the runtime behavior is
 ;;; doparendo). It compiles in (do) and then pushes the next instruction
-;;; address (the loop target) onto the stack.
+;;; address (the loop target) onto the stack along with a flag.
 dodo
   ;; compile (do)
   lda #<parendocode
@@ -1936,6 +2014,13 @@ skipmsb
   sta stackaccess
   lda DP+1
   sta stackaccess+1
+  jsr push16
+
+  ;; push a flag to contextualize the item on the stack. LOOP will
+  ;; need this in order to distinguish between a DO and a LEAVE.
+  lda #DOFLAG
+  sta stackaccess
+  stz stackaccess+1
   jsr push16
 
   jmp next          ; done!
@@ -1974,6 +2059,44 @@ doloop
   lda #>parenloopcode
   sta (DP),y
 
+looptest
+  ;; pop the flag off the stack and check DOFLAG or LEAVEFLAG
+  jsr pop16
+  lda stackaccess
+  cmp #LEAVEFLAG
+  beq fixleave
+  cmp #DOFLAG
+  beq loopcompile
+  jmp abortnest
+
+fixleave
+  ;; there's a LEAVEFLAG on the stack, so update the address there
+  ;; it should point to the instruction two cells (four bytes) after
+  ;; this one, so first, calculate that.
+  clc
+  lda DP
+  adc #4
+  sta SCRATCH
+  lda DP+1
+  adc #0            ; in case of carry
+  sta SCRATCH+1
+
+  jsr pop16         ; get the address from the stack
+  sec               ; substract from SCRATCH to get the offset
+  lda SCRATCH
+  sbc stackaccess
+  pha               ; cache LSB
+  lda SCRATCH+1
+  sbc stackaccess+1
+  ldy #1
+  sta (stackaccess),y ; and write it back into stackaccess
+  pla               ; pull the LSB
+  sta (stackaccess)
+
+  ;; there may be multiple LEAVEs, so loop around
+  jmp looptest
+
+;; we get here when we have found a DOFLAG on the stack
 loopcompile
   ;; increment DP
 .(
@@ -2036,7 +2159,7 @@ doplusloop
   ldy #1
   lda #>parplusloopcode
   sta (DP),y
-  bra loopcompile
+  bra looptest
 
 nocompile
   jmp next
@@ -2138,7 +2261,6 @@ takeloop
 
   jmp next
 
-
 noloop
   ;; we've already removed the values from the return stack
   ;; we need to update IP to skip the branch address
@@ -2153,6 +2275,94 @@ skipmsb
 .)
 
   jmp next
+
+
+;;; Doleave implements the compile-time of LEAVE. It compiles
+;;; a branch, leaving an offset to be resolved later by LOOP.
+doleave
+  lda #<parenleavecode
+  sta (DP)
+  ldy #1
+  lda #>parenleavecode
+  sta (DP),y
+
+  ;; increment DP to point to branch address location
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+
+  ;; we want to push this onto the stack BUT we need to "tuck" it
+  ;; under any interleaved IF/ELSE loops. so we need to look down
+  ;; the stack until we find the right place to put it, copy everything
+  ;; else, and then insert the address and the flag.
+  dex               ; first, make space for two new cells on the stack
+  dex               ; two cells equals four bytes, so four dex
+  dex
+  dex
+
+  txa               ; copy X into Y. we'll use Y as the index
+  tay               ; for looping down the stack
+
+  ;; BUG BUG BUG this loop is unbounded if we don't find a flag!
+lookforflag
+  lda stackbase+5,y ; is top item a DOFLAG?
+  cmp #DOFLAG
+  beq foundflag     ; yes
+  lda stackbase+5,y ; no, so we copy two cells up and try again
+  sta stackbase+1,y
+  lda stackbase+6,y
+  sta stackbase+2,y
+  lda stackbase+7,y
+  sta stackbase+3,y
+  lda stackbase+8,y
+  sta stackbase+4,y
+  iny               ; skip Y ahead to the next pair of cells
+  iny
+  iny
+  iny
+  bra lookforflag
+
+foundflag
+  ;; we have found the DOFLAG. use the two cells "above" this for our
+  ;; address and flag
+  lda DP            ; DP goes onto the stack
+  sta stackbase+3,y
+  lda DP+1
+  sta stackbase+4,y
+  lda #LEAVEFLAG
+  sta stackbase+1,y
+  lda #0
+  sta stackbase+2,y
+
+  ;; increment DP to point to next instruction address
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+
+  jmp next
+
+
+;;; doparenleave is the implementation of (leave), the run-time behavior
+;;; for LEAVE. It basically just does a branch, but first, it pops
+;;; some values off the return stack.
+doparenleave
+  sec
+  lda RP
+  sbc #4
+  sta RP
+  jmp dobranch
 
 
 ;;; dowords. Print out the words defined in the dictionary (including
@@ -2690,25 +2900,7 @@ wait_txd_empty3
   beq next_char
 .)
 
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda cantinterpret,y
-  beq nextstr
-  sta ACIA_DATA
-  iny
-  bra next_char
-nextstr
-.)
-
-  ;; flush input.
-  lda TCNT
-  sta TPTR          ; wait... off by one?
-  jmp interploop
+  jmp abortnotdef
 
 
 ;;; readnext
@@ -2825,6 +3017,59 @@ doneline
   rts
 
 
+;;; Implements ABORT. On error, resets and returns to interpreter.
+;;; BUG doesn't reset DP if we were in the process of compiling, so
+;;; leave a mess in the user space.
+abort
+  ;; turn off the compiler
+  lda STATUS
+  and #%11111110
+  sta STATUS
+
+  stz RP            ; reset return stack
+  ldx #$ff          ; reset user stack
+  stz TCNT          ; reset text buffer
+  stz TPTR
+
+  jsr crlf          ; print newline
+  jmp interploop    ; back to interpreter main loop
+
+
+;;; ABORT with a message about nesting
+abortnest
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda nesting,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+  jmp abort
+  
+;;; ABORT with a message about an undefined word
+abortnotdef
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda cantinterpret,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+  jmp abort
 
 
 
@@ -2967,6 +3212,6 @@ hextable:        .byte "0123456789ABCDEF"
 greeting	 .byte "SECND 6502 Forth v04 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
-cantinterpret:   .byte ": not defined", $0d, $0a, $00
-match:		 .byte " match!", $00
+cantinterpret:   .byte ": not defined", $00
+nesting:	 .byte "  nesting mismatch", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
