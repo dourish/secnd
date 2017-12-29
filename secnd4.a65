@@ -75,7 +75,7 @@ PADPTR=$0063        ; and 0064
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$1400      ; space for user code
+USERBASE=$1500      ; space for user code
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -658,6 +658,7 @@ d60entry
   .byte "0="
 d60link
   .word d59entry
+eqlzerocode
 d60code
   .word doeqlzero
 
@@ -701,7 +702,6 @@ d65link
 d65code
   .word doleave
 
-dtop
 d66entry
   .byte 7
   .byte "(leave)"
@@ -710,6 +710,31 @@ d66link
 parenleavecode
 d66code
   .word doparenleave
+
+d67entry
+  .byte 6
+  .byte "invert"
+d67link
+  .word d66entry
+d67code
+  .word doinvert
+
+d68entry
+  .byte %00100101   ; IMM plus count of five
+  .byte "while"
+d68link
+  .word d67entry
+d68code
+  .word dowhile
+
+dtop
+d69entry
+  .byte %00100110   ; IMM plus count of six
+  .byte "repeat"
+d69link
+  .word d68entry
+d69code
+  .word dorepeat
 
 ;; TOP OF DICTIONARY
 
@@ -2615,6 +2640,163 @@ do2minus
 done
   jmp next
 .)
+
+doinvert
+  lda stackbase+1,x
+  eor #$ff
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  sta stackbase+2,x
+  jmp next
+
+;;; Implements compile-time behaviour for WHILE (inside BEGIN/REPEAT).
+;;; Compiles to 0branch and then leaves offset address on the stack.
+dowhile
+  lda #<zerobracode ; compile 0branch
+  sta (DP)
+  ldy #1
+  lda #>zerobracode
+  sta (DP),y
+
+  ;; increment DP past the instruction and on to offset location
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+
+  lda DP            ; push the address of the branch offset
+  sta stackaccess
+  lda DP+1
+  sta stackaccess+1
+  jsr push16
+
+  lda #WHILEFLAG    ; push a flag to contextualize that address
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+
+  ;; increment DP once more
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+
+  jmp next
+
+
+;;; compile-time behaviour for repeat is to fix up any stacked
+;;; WHILE calls and branch back to the last BEGIN
+dorepeat
+.(
+  lda STATUS
+  bit #COMPILE
+  beq quitdorepeat
+
+  lda #<branchcode
+  sta (DP)
+  ldy #1
+  lda #>branchcode
+  sta (DP),y
+
+reptest
+  ;; pop the flag off the stack and check DOFLAG or LEAVEFLAG
+  jsr pop16
+  lda stackaccess
+  cmp #WHILEFLAG
+  beq fixwhile
+  cmp #BEGINFLAG
+  beq bracompile
+  jmp abortnest
+
+fixwhile
+  ;; there's a LEAVEFLAG on the stack, so update the address there
+  ;; it should point to the instruction two cells (four bytes) after
+  ;; the current DP, so first, calculate that.
+  ;; NB this code is shared with LOOP so integrate
+  clc
+  lda DP
+  adc #4
+  sta SCRATCH
+  lda DP+1
+  adc #0            ; in case of carry
+  sta SCRATCH+1
+
+  jsr pop16         ; get the address from the stack
+  sec               ; substract from SCRATCH to get the offset
+  lda SCRATCH
+  sbc stackaccess
+  pha               ; cache LSB
+  lda SCRATCH+1
+  sbc stackaccess+1
+  ldy #1
+  sta (stackaccess),y ; and write it back into stackaccess
+  pla               ; pull the LSB
+  sta (stackaccess)
+
+  ;; may be multiple WHILEs so loop around
+  jmp reptest
+
+bracompile
+  ;; we get here when we finally hit the BEGIN flag
+  ;; increment DP
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
+  inc DP+1
+skipmsb
+.)
+
+  ;; now compile in the branch offset. first,
+  ;; pull the address at the start of the loop
+  jsr pop16
+
+  ;; now calculate the offset. Subtract current DP from the value
+  ;; on the stack. Result is negative number (the branch backwards).
+  sec
+  lda stackaccess
+  sbc DP
+  sta SCRATCH
+  lda stackaccess+1
+  sbc DP+1
+  sta SCRATCH+1
+
+  ;; now write that in as a parameter to the branch.
+  ;; BUG lots of needless reads and writes going on here
+  lda SCRATCH
+  sta (DP)
+  ldy #1
+  lda SCRATCH+1
+  sta (DP),y
+
+  ;; increment DP again
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
+  inc DP+1
+skipmsb
+.)
+
+quitdorepeat
+.)
+  jmp next
+
 
 
 ;;;
