@@ -738,7 +738,6 @@ d69link
 d69code
   .word dorepeat
 
-dtop
 d70entry
   .byte %00100111   ; IMM plus count of seven
   .byte "recurse"
@@ -746,6 +745,15 @@ d70link
   .word d69entry
 d70code
   .word dorecurse
+
+dtop
+d71entry
+  .byte %00100001   ; IMM plus count of one
+  .byte $5c         ; backslash
+d71link
+  .word d70entry
+d71code
+  .word dobackslsh
 
 
 ;; TOP OF DICTIONARY
@@ -2852,6 +2860,11 @@ continue
   jmp next          ; we're done
 
 
+;;; backslash -- ignore the rest of the line
+dobackslsh
+  stz TCNT          ; flush the input buffer
+  stz TPTR
+  jmp next
 
 ;;;
 ;;; TEXT INTERPRETER
