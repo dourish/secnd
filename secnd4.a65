@@ -75,7 +75,7 @@ PADPTR=$0063        ; and 0064
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$1500      ; space for user code
+USERBASE=$1500      ; staring address for user code
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -100,7 +100,9 @@ WHILEFLAG=$FB       ; left by WHILE
 
 
 ;;;
-;;; initialization and configuration
+;;; Initialization and configuration. This version is running
+;;; from RAM, so there's no need to initialize the ACIA. Set up
+;;; the stack and the major variables.
 ;;;
 coldstart
   ;; initialize stack...
@@ -112,10 +114,10 @@ coldstart
   stz IP
   stz IP+1
 
-  stz STATUS        ; turn of compilation
+  stz STATUS        ; turn off compilation
 
   ;; Initialize the return stack. I'm just putting that on page 2, 
-  ;; growing upwards, until I have a better idea.
+  ;; growing upwards, until I have a better idea. 
   stz RP
   lda #$02
   sta RP+1
