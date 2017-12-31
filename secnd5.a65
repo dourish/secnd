@@ -754,7 +754,6 @@ d71link
 d71code
   .word dobackslsh
 
-dtop
 d72entry
   .byte 8
   .byte "constant"
@@ -762,6 +761,32 @@ d72link
   .word d71entry
 d72code
   .word doconstant
+
+d73entry
+  .byte %00100010   ; IMM flag plus count of two
+  .byte $73, $22    ; "s", quote (.")
+d73link
+  .word d72entry
+d73code
+  .word dosquote
+
+d74entry
+  .byte 4
+  .byte "(s", $22, ")"
+d74link
+  .word d73entry
+parsquotecode
+d74code
+  .word dostrlit
+
+dtop
+d75entry
+  .byte 4
+  .byte "type"
+d75link
+  .word d74entry
+d75code
+  .word dotype
 
 
 ;; TOP OF DICTIONARY
@@ -1118,7 +1143,32 @@ continue
 .)
 
   jmp next
+  
 
+;;; dostrlit is the run-time behaviour for S" (ie, string literal). Loads
+;;; string address and string length onto the stack.
+dostrlit
+  lda IP           ; IP points to the string address
+  sta stackaccess  ; so store in stackaccess
+  lda IP+1
+  sta stackaccess+1
+  jsr push16       ; add to the data stack
+  
+  lda (IP)         ; load the length count
+  sta stackaccess
+  stz stackaccess+1 ; max 255 characters in a string
+  jsr push16
+
+  lda (IP)         ; load the count again
+  inc              ; add one to get number of bytes to skip
+  clc              ; bump IP past the string constant
+  adc IP
+  sta IP
+  lda IP+1
+  adc #0
+  sta IP+1
+
+  jmp next         ; done
 
 ;;; dovaddr is the internal code for variables... look up the current
 ;;; XT and use it to find the address reserved for the variable, and
@@ -1724,10 +1774,58 @@ continue
   jmp next          ; continue to the next instruction
 
 
+;;; This is the compiler behavior for S"; it compiles dostrlit
+;;; and an inline string constant. (do-s-quote)
+dosquote
+  ldy #1
+  lda #<parsquotecode
+  sta (DP)
+  lda #>parsquotecode
+  sta (DP),y
+
+  ;; then update DP by 2, to account for that word
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+
+  jsr assemblestr   ; read and assemble string from input
+
+  ;; now we copy it into space where we are comping, pointed to by DP.
+  ;; BUG this code is shared with dodotqu, so factor it out. I think
+  ;; it is technically $,"... yeah?
+  lda PAD           ; first, copy the length
+  sta (DP)
+
+  tay               ; now copy the rest of the string (backwards)
+charloop
+  lda PAD,y
+  sta (DP),y
+  dey
+  bne charloop
+
+  ;; now update DP to account for the string
+  clc
+  lda PAD           ; that's the length count for the string
+  inc               ; add one for the count byte
+  adc DP            ; bump DP by that many bytes
+  sta DP
+  lda DP+1
+  adc #$0
+  sta DP+1
+
+  jmp next          ; done
+
+
 ;;; Read text from the input buffer up until a single quote mark
 ;;; and assemble it onto the PAD. At the end, we'll have a string
 ;;; that is both counted and null-terminated. This is used in both
-;;; compile mode and run mode of dotquote.
+;;; compile mode and run mode of dotquote and in S".
 assemblestr
 
   ;; first, set up the PAD ptr
@@ -1790,6 +1888,32 @@ finished
 
   rts
 
+
+
+;;; dotype implements TYPE. Reads a count and a string address from the
+;;; stack and prints the number of characters indicated in the count.
+dotype
+  jsr pop16
+  ldy stackaccess   ; put the count in Y
+  jsr pop16         ; fetch the string address
+  cpy #0
+  beq endtype       ; stop now if the count was 0
+
+  phx               ; save X temporarily
+
+  tya               ; move Y into X (via A)
+  tax
+  ldy #1            ; start Y at 1 (to skip count byte)
+typenext
+  lda (stackaccess),y
+  jsr puta
+  iny
+  dex
+  bne typenext
+  plx               ; restore X
+
+endtype
+  jmp next
 
 ;;; 0branch is an internal word used for conditionals. Test top of stack,
 ;;; and if false, add the next parameter (ie instruction offset) to the
