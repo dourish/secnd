@@ -76,7 +76,7 @@ PADPTR=$0063        ; and 0064
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$1500      ; staring address for user code
+USERBASE=$1800      ; staring address for user code
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -204,8 +204,8 @@ d4param
   .word d0code
 
 d5entry
-  .byte 5
-  .byte "dolit"
+  .byte 3
+  .byte "lit"
 d5link
   .word d4entry
 dolitcode
@@ -228,7 +228,7 @@ d7link
 d7code
   .word dolist
 d7param
-  .word d5code      ; code for dolit
+  .word d5code      ; code for lit
   .word 0002
   .word d2code
   .word d0code
@@ -746,7 +746,6 @@ d70link
 d70code
   .word dorecurse
 
-dtop
 d71entry
   .byte %00100001   ; IMM plus count of one
   .byte $5c         ; backslash
@@ -754,6 +753,15 @@ d71link
   .word d70entry
 d71code
   .word dobackslsh
+
+dtop
+d72entry
+  .byte 8
+  .byte "constant"
+d72link
+  .word d71entry
+d72code
+  .word doconstant
 
 
 ;; TOP OF DICTIONARY
@@ -1132,6 +1140,30 @@ continue
   jsr push16        ; push the address
   jmp next
 
+;;; As above, but for constants, so we don't load the address,
+;;; but the value.
+doloadconst
+  lda XT
+  sta SCRATCH
+  lda XT+1
+  sta SCRATCH+1
+.(
+  clc
+  lda SCRATCH       ; add two bytes (one cell) to find param area
+  adc #2
+  sta SCRATCH
+  bcc continue
+  inc SCRATCH+1
+continue
+.)
+  lda (SCRATCH)
+  sta stackaccess
+  ldy #1
+  lda (SCRATCH),y
+  sta stackaccess+1
+  jsr push16        ; push the address
+  jmp next
+
 ;;; dofetch is the code for "@". Pull an address off the stack and
 ;;; look up the 16-bit data stored at that address
 dofetch
@@ -1231,6 +1263,75 @@ copynext            ; now copy the rest of the word, backwards
 
   iny               ; bump twice more to allow parameter space
   iny               ; for storage
+
+  ;; set DT to new top entry, the one we've just created here
+  lda DP
+  sta DT
+  lda DP+1
+  sta DT+1
+
+.(
+  clc               ; update DP to next available space
+  tya               ; by adding bytes consumed to DP
+  adc DP
+  sta DP
+  bcc continue
+  inc DP+1
+continue
+.)
+ 
+  jmp next
+
+;;; constant reads the next word from input and allocates space
+;;; for it in the dictionary as a constant (just like variable
+;;; above, except that the code will do something different).
+;;; BUG shares so much code with above, we should reuse
+doconstant
+  ;; grab next word from the input buffer
+  jsr readnext      ; next word from input buffer into WORD
+ 
+  ;; copy word from WORD
+  lda WORD          ; first, copy the count
+  sta (DP)
+  tay               ; store count in Y
+.(
+copynext            ; now copy the rest of the word, backwards
+  lda WORD,y        ; copy Yth letter
+  sta (DP),y        ; store it in dictionary space
+  dey               ; count down to 0
+  bne copynext
+.)
+
+  lda (DP)          ; set Y to next available byte
+  tay
+  iny
+
+  ;; set link to location pointed to by DT
+  lda DT
+  sta (DP),y
+  iny
+  lda DT+1
+  sta (DP),y
+  iny
+
+  ;; set code to doloadconst
+  lda #<doloadconst ; one of only two lines different from above
+  sta (DP),y
+  iny
+  lda #>doloadconst ; and this is the other one
+  sta (DP),y
+  iny
+
+  ;; now load a word from the stack and copy it into the
+  ;; space for the constant value
+  lda stackbase+1,x
+  sta (DP),y
+  iny
+  lda stackbase+2,x
+  sta (DP),y
+  iny
+  inx               ; drop two bytes (one cell) from the stack
+  inx               
 
   ;; set DT to new top entry, the one we've just created here
   lda DP
