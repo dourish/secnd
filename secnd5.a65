@@ -37,8 +37,8 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0080 through 00FF is operand stack
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
-;;; 0300 through 12FF is the interpreter and compiler code (this file)
-;;; 1400 through 7DFF is user dictionary space
+;;; 0300 through 1FFF is the interpreter and compiler code (this file)
+;;; 2000 through 7DFF is user dictionary space
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
 ;;; 7F00 through 7FFF is the input buffer (TIB)
@@ -76,7 +76,7 @@ PADPTR=$0063        ; and 0064
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$1800      ; staring address for user code
+USERBASE=$2000      ; staring address for user code
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -779,7 +779,6 @@ parsquotecode
 d74code
   .word dostrlit
 
-dtop
 d75entry
   .byte 4
   .byte "type"
@@ -788,8 +787,121 @@ d75link
 d75code
   .word dotype
 
+d76entry
+  .byte 3
+  .byte "s>d"
+d76link
+  .word d75entry
+d76code
+  .word dosgltodbl
+
+d77entry
+  .byte 2
+  .byte "d+"
+d77link
+  .word d76entry
+d77code
+  .word doadd32
+
+d78entry
+  .byte 2
+  .byte "d-"
+d78link
+  .word d77entry
+d78code
+  .word dosub32
+
+d79entry
+  .byte 2
+  .byte "m+
+d79link
+  .word d78entry
+d79code
+  .word doaddmix
+
+d80entry
+  .byte 2
+  .byte "d="
+d80link
+  .word d79entry
+d80code
+  .word doeql32
+
+d81entry
+  .byte 3
+  .byte "d0="
+d81link
+  .word d80entry
+d81code
+  .word dozero32
+
+d82entry
+  .byte 2
+  .byte "m*"
+d82link
+  .word d81entry
+d82code
+  .word domultmix
+
+d83entry
+  .byte 2
+  .byte "d."
+d83link
+  .word d82entry
+d83code
+  .word prdec32
+
+d84entry
+  .byte 5
+  .byte "2swap"
+d84link
+  .word d83entry
+d84code
+  .word do2swap
+
+d85entry
+  .byte 4
+  .byte "2dup"
+d85link
+  .word d84entry
+d85code
+  .word do2dup
+
+d86entry
+  .byte 5
+  .byte "2over"
+d86link
+  .word d85entry
+d86code
+  .word do2over
+
+d87entry
+  .byte 5
+  .byte "2drop"
+d87 link
+  .word d86entry
+d87code
+  .word do2drop
+
+d88entry
+  .byte 6
+  .byte "lshift"
+d88link
+  .word d87entry
+d88code
+  .word dolshift
+
+dtop
+d89entry
+  .byte 6
+  .byte "rshift"
+d89link
+  .word d88entry
+d89code
+  .word dorshift
 
 ;; TOP OF DICTIONARY
+
 
 
 ;;;
@@ -974,6 +1086,30 @@ dodrop
 
 doswap
   jsr swap16
+  jmp next
+
+dorshift
+.(
+  jsr pop16         ; max is 32 by standard
+  ldy stackaccess
+loop
+  lsr stackbase+2,x ; going right, so start with MSB
+  ror stackbase+1,x
+  dey
+  bne loop
+.)
+  jmp next
+
+dolshift
+.(
+  jsr pop16         ; max is 32 by standard
+  ldy stackaccess
+loop
+  asl stackbase+1,x ; going left, so start with LSB
+  rol stackbase+2,x
+  dey
+  bne loop
+.)
   jmp next
 
 doequal
@@ -3090,6 +3226,418 @@ dobackslsh
   stz TCNT          ; flush the input buffer
   stz TPTR
   jmp next
+
+
+
+;;;
+;;; DOUBLE-LENGTH ARITHMETIC
+;;;
+;;; These routines are all for double-length (ie, 32-bit
+;;; rather then 16-bit) arithmetic, although for the moment,
+;;; I'm entirely ignoring issues about signed vs unsigned.
+;;;
+
+;;; promote a single-lenth value to a double-legnth value (S>D).
+dosgltodbl
+  dex               ; add space on the stack
+  dex
+  lda stackbase+3,x ; copy the single-length cell down
+  sta stackbase+1,x
+  lda stackbase+4,x
+  sta stackbase+2,x
+  stz stackbase+3,x ; then zero out the upper cell
+  stz stackbase+4,x
+  jmp next
+
+;;; double-length addition
+doadd32
+  clc
+  lda stackbase+1,x ; byte #1
+  adc stackbase+5,x
+  sta stackbase+5,x ; leaves result in lower area on stack
+  lda stackbase+2,x ; byte #2
+  adc stackbase+6,x
+  sta stackbase+6,x
+  lda stackbase+3,x ; byte #3
+  adc stackbase+7,x
+  sta stackbase+7,x
+  lda stackbase+4,x ; byte #4
+  adc stackbase+8,x
+  sta stackbase+8,x
+  inx               ; drop the upper two-cell number
+  inx
+  inx
+  inx
+  jmp next          ; done
+
+;;; mixed-length addition. Add a 16-bit wide number on the top of
+;;; the stack to a 32-bit wide number below it.
+doaddmix
+  clc
+  lda stackbase+1,x ; byte #1
+  adc stackbase+3,x
+  sta stackbase+3,x ; leaves result in lower area on stack
+  lda stackbase+2,x ; byte #2
+  adc stackbase+4,x
+  sta stackbase+4,x
+  lda stackbase+5,x ; byte #3
+  adc #0
+  sta stackbase+5,x
+  lda stackbase+6,x ; byte #4
+  adc #0
+  sta stackbase+6,x
+  inx               ; drop the single-length number
+  inx
+  jmp next          ; done
+
+
+;;; double-length subtraction
+dosub32
+  sec                        ; set the carry
+  lda stackbase+5,x ; byte #1
+  sbc stackbase+1,x
+  sta stackbase+5,x ; leaves result in lower area on stack
+  lda stackbase+6,x ; byte #2
+  sbc stackbase+2,x
+  sta stackbase+6,x
+  lda stackbase+7,x ; byte #3
+  sbc stackbase+3,x
+  sta stackbase+7,x
+  lda stackbase+8,x ; byte #4
+  sbc stackbase+4,x
+  sta stackbase+8,x
+  inx               ; drop the upper two-cell number
+  inx
+  inx
+  inx
+  jmp next          ; done
+
+
+;;; test for equality for 32-bit numbers
+doeql32
+.(
+  lda stackbase+1,x
+  cmp stackbase+5,x
+  bne notequal
+  lda stackbase+2,x
+  cmp stackbase+6,x
+  bne notequal
+  lda stackbase+3,x
+  cmp stackbase+7,x
+  bne notequal
+  lda stackbase+4,x
+  cmp stackbase+8,x
+  bne notequal
+equal
+  lda #$01          ; true = 1
+  sta stackbase+7,x
+  bra done
+notequal
+  stz stackbase+7,x ; false = 0
+done
+  stz stackbase+8,x ; upper byte is zero either way
+  inx               ; drop upper double number
+  inx
+  inx
+  inx
+  inx               ; drop one cell of the lower double number
+  inx
+.)
+  jmp next
+
+
+;;; compare a 32-bit number to zero
+dozero32
+.(
+  lda stackbase+1,x ; or all the bytes together
+  ora stackbase+2,x
+  ora stackbase+3,x
+  ora stackbase+4,x
+  beq zero          ; zero?
+notzero
+  stz stackbase+3,x ; no == false == 0
+  bra done
+zero
+  lda #1            ; yes == true == 1
+  sta stackbase+3,x
+done
+  stz stackbase+4,x
+  inx               ; trim result down to single length
+  inx
+.)
+  jmp next          ; done
+
+;;; domultmix -- multiply two 16-bit numbers, giving a 32-bit result
+domultmix
+.(
+  dex               ; make some working space on the stack
+  dex               ; need six bytes... four for our result and
+  dex               ; two for the expansion of n1
+  dex
+  dex
+  dex
+  stz stackbase+1,x ; zero it out
+  stz stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+  stz stackbase+5,x
+  stz stackbase+6,x
+
+  ;; multiplying n1 by n2. n1lsb is stackbase+7,x;
+  ;; n1msb is stackbase+8,x; n2lsb is stackbase+9,x; and
+  ;; n2msb is stackbase+10,x
+nextbit
+  ; first bit
+  lda #$01
+  bit stackbase+9,x ; test lowest bit of n2
+  beq nextshift     ; if it's zero, skip to shifting
+  ; it's one, so we do an addition
+  clc
+  lda stackbase+7,x ; add n1 to our working count
+  adc stackbase+1,x ; which is stored in the temporary stack space
+  sta stackbase+1,x
+  lda stackbase+8,x
+  adc stackbase+2,x
+  sta stackbase+2,x
+  lda stackbase+3,x ; 32-bit extension space for n1
+  adc stackbase+5,x
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc stackbase+6,x
+  sta stackbase+4,x
+nextshift           ; now shift n1 one place to the left
+  ; shift n1 left
+  asl stackbase+7,x
+  rol stackbase+8,x
+  rol stackbase+5,x ; this is the space into which we're extending
+  rol stackbase+6,x ; n1 (for double length)
+  ; shift n2 right
+  clc               ; and shift n2 one place to the left
+  ror stackbase+10,x
+  ror stackbase+9,x
+  bne nextbit       ; if n2 is non-zero, then continue on
+  lda stackbase+10,x
+  bne nextbit
+done
+.)
+  ;; clean up the mess we made on the stack
+  ;; first, put the result back in the right place
+  lda stackbase+1,x
+  sta stackbase+7,x
+  lda stackbase+2,x
+  sta stackbase+8,x
+  lda stackbase+3,x
+  sta stackbase+9,x
+  lda stackbase+4,x
+  sta stackbase+10,x
+  ;; then, discard our temporary space
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+  jmp next
+
+
+;;; Print a 32-bit decimal number. This is kinda awful. The technique
+;;; I used for 16-bits was messy enough, but this is messier now that
+;;; I've extended it.
+prdec32
+  ;; create myself five bytes of storage on the stack. these will
+  ;; become ten nybbles each holding a single binary-coded decimal
+  ;; digit (since 32 bytes stores a max of a ten-digit decimal).
+  dex
+  dex
+  dex
+  dex
+  dex
+  
+  ;; that leaves the data to be read at stackbase+6,x through
+  ;;  stackbase+9,x
+  
+  stz stackbase+1,x ; dec0
+  stz stackbase+2,x ; dec1
+  stz stackbase+3,x ; dec2
+  stz stackbase+4,x ; dec3
+  stz stackbase+5,x ; dec4
+
+  phy               ; preserve Y (why?)
+  lda #0
+  sed
+  ldy #32           ; count of bits we are processing
+
+.(
+loop
+  asl stackbase+6,x ; roll bits out of the data values
+  rol stackbase+7,x ; and into the carry, one by one
+  rol stackbase+8,x
+  rol stackbase+9,x
+  lda stackbase+1,x ; and then use carry to add into the
+  adc stackbase+1,x ; decimal space
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc stackbase+2,x
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc stackbase+4,x
+  sta stackbase+4,x
+  lda stackbase+5,x
+  adc stackbase+5,x
+  sta stackbase+5,x
+  dey
+  bne loop
+.)
+  cld
+  ;; we have the result in the temporary storage, as BCD. now print that as
+  ;; a ten-character string. do this as five loops of an upper and
+  ;; lower nybble.
+
+  ;; set a flag to determine whether we've printed anything non-zero
+  stz SCRATCH
+
+  ;; print leading space
+  lda #$20
+  jsr puta
+
+  txa
+  adc #<stackbase
+  sta SCRATCH+2
+  lda #>stackbase
+  sta SCRATCH+3
+  ldy #5
+
+.(
+nextdec             ; go through this loop for each BCD digit
+  ;; first, upper four bytes
+  lda (SCRATCH+2),y
+  and #%11110000
+  bne prupper       ; non-zero
+  cmp SCRATCH       ; if it's zero, check if we're printing zeros
+  beq lower         ; if we're not, then skip this one
+prupper
+  clc               ; shift the top four bits down to the bottom
+  ror
+  ror
+  ror
+  ror
+  clc
+  adc #'0
+  jsr puta
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+lower
+  ;; next, lower four bytes
+  lda (SCRATCH+2),y
+  and #%00001111
+  bne prlower       ; non-zero
+  cmp SCRATCH       ; if it's zero, check if we're printing zeros
+  beq skip          ; if we're not, then skip this one
+prlower
+  clc
+  adc #'0
+  jsr puta
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+skip
+  dey
+  bne nextdec
+.)
+
+  clc               ; nine bytes off the stack (five for working
+  txa               ; space and four for the 32-bit number).
+  adc #9
+  tax
+  ply               ; restore Y (why?)
+  jmp next
+
+
+;;;
+;;; DOUBLE CELL STACK ROUTINES
+;;;
+
+do2dup
+  dex
+  dex
+  dex
+  dex
+  lda stackbase+5,x
+  sta stackbase+1,x
+  lda stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+7,x
+  sta stackbase+3,x
+  lda stackbase+8,x
+  sta stackbase+4,x
+  jmp next
+
+do2drop
+  inx
+  inx
+  inx
+  inx
+  jmp next
+
+do2over
+  dex
+  dex
+  dex
+  dex
+  lda stackbase+9,x
+  sta stackbase+1,x
+  lda stackbase+10,x
+  sta stackbase+2,x
+  lda stackbase+11,x
+  sta stackbase+3,x
+  lda stackbase+12,x
+  sta stackbase+4,x
+  jmp next
+
+do2swap
+  dex               ; make some temporary space
+  dex
+  dex
+  dex
+  lda stackbase+5,x ; cache the two top cells
+  sta stackbase+1,x
+  lda stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+7,x
+  sta stackbase+3,x
+  lda stackbase+8,x
+  sta stackbase+4,x
+
+  lda stackbase+9,x ; copy lower two cells into upper two
+  sta stackbase+5,x
+  lda stackbase+10,x
+  sta stackbase+6,x
+  lda stackbase+11,x
+  sta stackbase+7,x
+  lda stackbase+12,x
+  sta stackbase+8,x
+
+  lda stackbase+1,x ; replace lower two cells with cached values
+  sta stackbase+9,x
+  lda stackbase+2,x
+  sta stackbase+10,x
+  lda stackbase+3,x
+  sta stackbase+11,x
+  lda stackbase+4,x
+  sta stackbase+12,x
+
+  inx               ; clean up
+  inx
+  inx
+  inx
+
+  jmp next
+
+
 
 ;;;
 ;;; TEXT INTERPRETER
