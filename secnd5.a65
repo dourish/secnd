@@ -3484,7 +3484,7 @@ prdec32
   ;; next, check the most significant bit of the number
   ;; to see if it's negative
   lda stackbase+9,x
-  bit #%1000000
+  bit #%10000000
   beq nominus
 
   ;; it's negative, so print the minus and calculate two's complement
@@ -4414,7 +4414,7 @@ print16sign
   ;; next, check the most significant bit of the number
   ;; to see if it's negative
   lda stackbase+5,x
-  bit #%1000000
+  bit #%10000000
   beq nominus
 
   lda #$2d          ; minus sign
