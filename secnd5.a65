@@ -891,7 +891,6 @@ d88link
 d88code
   .word dolshift
 
-dtop
 d89entry
   .byte 6
   .byte "rshift"
@@ -899,6 +898,15 @@ d89link
   .word d88entry
 d89code
   .word dorshift
+
+dtop
+d90entry
+  .byte 2
+  .byte "*/"
+d90link
+  .word d89entry
+d90code
+  .word dostardiv
 
 ;; TOP OF DICTIONARY
 
@@ -3383,6 +3391,10 @@ done
 
 ;;; domultmix -- multiply two 16-bit numbers, giving a 32-bit result
 domultmix
+  jsr multmixsub
+  jmp next
+
+multmixsub
 .(
   dex               ; make some working space on the stack
   dex               ; need six bytes... four for our result and
@@ -3451,6 +3463,172 @@ done
   inx
   inx
   inx
+  rts
+
+
+;;; mixed-length division. Divide a 32-bit number by a 16-bit number,
+;;; giving a 16-bit result. This is used as part of */.
+;;; on entry, the 16-bit divisor is on the top of the stack (ie
+;;; at stackbase+1 and +2), and the 32-bit divisand is lower (ie
+;;; at stackbase+3 through +6)
+divmixsub
+.(
+  phy               ; preserve Y
+
+  ;; handle negative numbers. we convert everything to positive and
+  ;; keep a note of whether we need to negate the result. this is
+  ;; kinda a crappy way to do this but will get me through for now.
+  ;; BUG FIX NEGATIVE DIVISION
+  stz SCRATCH
+
+  lda stackbase+6,x ; test top bit of divisand
+  bit #%10000000
+  beq testdivisor
+  eor #$ff          ; negative, so negate it
+  sta stackbase+6,x
+  
+  clc               ; flip bits and add one to generate two's complement
+  lda stackbase+3,x
+  eor #$ff
+  adc #1
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  adc #0
+  sta stackbase+4,x
+  lda stackbase+5,x
+  eor #$ff
+  adc #0
+  sta stackbase+5,x
+  lda stackbase+6,x
+  adc #0            ; already EOR'd this byte up top
+  sta stackbase+6,x
+  inc SCRATCH
+
+testdivisor
+  lda stackbase+2,x ; now do the same to the divisor
+  bit #%10000000
+  beq continue
+  eor #$ff          ; flip bits and add one to generate two's complement
+  sta stackbase+2,x
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  inc SCRATCH
+
+continue
+  ;; make some working space on the stack. two 16-bit values needed.
+  dex
+  dex
+  dex
+  dex
+
+  ;; zero out those spaces
+  stz stackbase+1,x ; stackbase+1 and +2 are remainlsb, remainmsb
+  stz stackbase+2,x
+  stz stackbase+3,x ; stackbase+3 and +4 are resultlsb, resultmsb
+  stz stackbase+4,x
+
+  ; divisor (n1) is now stackbase+5 and +6
+  ; divisand (n2) is npw stackbase+7 through +10
+
+  ldy #$20          ; loop count, going 32 times (one per divisand bit)
+nextbit
+  ; shift n2 (divisand) left, rotating top bit into temp
+  asl stackbase+7,x
+  rol stackbase+8,x
+  rol stackbase+9,x
+  rol stackbase+19,x
+  rol stackbase+1,x
+  rol stackbase+2,x
+  ; is temp larger than/equal to n1?
+  lda stackbase+2,x       ; msb first -- does that resolve it?
+  cmp stackbase+6,x
+  bcc shift0
+  bne subtract
+  lda stackbase+1,x
+  cmp stackbase+5,x
+  bcs subtract
+  bra shift0
+  ; yes so subtract divisor from temp
+subtract
+  sec
+  lda stackbase+2,x
+  sbc stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+1,x
+  sbc stackbase+5,x
+  sta stackbase+1,x
+  ; shift and test
+shift1
+  ; shift result one place left, shifting in a 1 at the bottom
+  sec
+  rol stackbase+3,x
+  rol stackbase+4,x
+  bra test
+shift0
+  ; shift result one place left, shifting in a 1 at the bottom
+  clc
+  rol stackbase+3,x
+  rol stackbase+4,x
+test
+  ; test-- are we done (all 16 bits)?
+  dey
+  bne nextbit
+  ;; we are now done.
+  ;; remainder is in stackbase+1 and +2; quotient is in stackbase+3 and +4
+enddiv
+.)
+
+  lda stackbase+3,x ; put result in right place
+  sta stackbase+9,x
+  lda stackbase+4,x
+  sta stackbase+10,x
+  inx               ; clean up stack (input data and working space)
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+  inx
+
+  ;; if the lowest bit of SCRATCH is set, then negate the result
+  lda SCRATCH
+  bit #1
+  beq donemixdiv
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+donemixdiv
+  ply               ; restore y
+  rts
+
+
+dostardiv
+  jsr pop16         ; temporarily move divisor out of the way
+  lda stackaccess
+  pha
+  lda stackaccess+1
+  pha
+  jsr multmixsub    ; do the multiplication
+  pla               ; put the divisor back
+  sta stackaccess+1
+  pla
+  sta stackaccess
+  jsr push16
+  jsr divmixsub     ; do the division
   jmp next
 
 
