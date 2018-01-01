@@ -20,7 +20,7 @@
 ;;; v03  first steps for compiler, basic lists, strings, loops, conditionals
 ;;; v04  rounding out vocabulary, linking more internal operations to
 ;;;      external words, adding nest checking
-;;; v05  recursion
+;;; v05  recursion, double-length arithmetic, pair operations
 
   * = $0300
 
