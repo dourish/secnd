@@ -1069,7 +1069,7 @@ domod
   jmp next
 
 doprint
-  jsr print16dec
+  jsr print16sign
   jmp next
 
 docr
@@ -3239,14 +3239,28 @@ dobackslsh
 
 ;;; promote a single-lenth value to a double-legnth value (S>D).
 dosgltodbl
+.(
   dex               ; add space on the stack
   dex
   lda stackbase+3,x ; copy the single-length cell down
   sta stackbase+1,x
   lda stackbase+4,x
   sta stackbase+2,x
-  stz stackbase+3,x ; then zero out the upper cell
+
+  ;; extend whatever the sign bit is of this word into the
+  ;; larger word. so check if it's one or zero
+  lda stackbase+4,x
+  bit #%10000000
+  beq zerobits      ; it's zero
+  lda #$ff          ; it's one, so load FF into each byte
+  sta stackbase+3,x
+  sta stackbase+4,x
+  bra end
+zerobits
+  stz stackbase+3,x ; zero out the upper cell
   stz stackbase+4,x
+end
+.)
   jmp next
 
 ;;; double-length addition
@@ -3442,8 +3456,9 @@ done
 
 ;;; Print a 32-bit decimal number. This is kinda awful. The technique
 ;;; I used for 16-bits was messy enough, but this is messier now that
-;;; I've extended it.
+;;; I've extended it. (Updated to handle negative numbers.)
 prdec32
+.(
   ;; create myself five bytes of storage on the stack. these will
   ;; become ten nybbles each holding a single binary-coded decimal
   ;; digit (since 32 bytes stores a max of a ten-digit decimal).
@@ -3462,6 +3477,51 @@ prdec32
   stz stackbase+4,x ; dec3
   stz stackbase+5,x ; dec4
 
+  ;; always print a space
+  lda #$20
+  jsr puta
+
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+9,x
+  bit #%1000000
+  beq nominus
+
+  ;; it's negative, so print the minus and calculate two's complement
+  lda #$2d          ; minus sign
+  jsr puta
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  lda stackbase+6,x
+  eor #$ff
+  sta stackbase+6,x
+  lda stackbase+7,x
+  eor #$ff
+  sta stackbase+7,x
+  lda stackbase+8,x
+  eor #$ff
+  sta stackbase+8,x
+  lda stackbase+9,x
+  eor #$ff
+  sta stackbase+9,x
+  clc
+  lda stackbase+6,x
+  adc #1
+  sta stackbase+6,x
+  lda stackbase+7,x
+  adc #0
+  sta stackbase+7,x
+  lda stackbase+8,x
+  adc #0
+  sta stackbase+8,x
+  lda stackbase+9,x
+  adc #0
+  sta stackbase+9,x
+
+  ;; continue with printing
+
+nominus
   phy               ; preserve Y (why?)
   lda #0
   sed
@@ -3498,10 +3558,6 @@ loop
 
   ;; set a flag to determine whether we've printed anything non-zero
   stz SCRATCH
-
-  ;; print leading space
-  lda #$20
-  jsr puta
 
   txa
   adc #<stackbase
@@ -3554,6 +3610,7 @@ skip
   adc #9
   tax
   ply               ; restore Y (why?)
+.)
   jmp next
 
 
@@ -3823,13 +3880,22 @@ nomatch
 
   ldy WORD
 numcheck
+.(
   lda WORD,y
+  cmp #$2d          ; minus sign
+  bne digitcheck
+  cpy #$1           ; only allowed when y=1
+  bne nointerpret
+  bra continue
+digitcheck
   cmp #$30
   bcc nointerpret   ; BCC = branch if less than
   cmp #$40
   bcs nointerpret   ; BCS = branch if greater or equal
+continue
   dey
   bne numcheck
+.)
 
   ;; convert number and put it on the stack
   ;; my routines for this us a null-terminated string, so add a null
@@ -3848,7 +3914,8 @@ numcheck
 done
 .)
   jsr push16
-  jsr readdec16     ; convert it, leave it on the stack
+  jsr readsign16    ; read a signed number (ie process leading minus)
+  ;;jsr readdec16     ; convert it, leave it on the stack
 
 
   ;; if we are compiling, we need to take it off the stack again
@@ -4228,6 +4295,280 @@ wait_txd_empty
   sta ACIA_DATA
   pla
   rts
+
+
+;; readsign16 looks on the stack for the address of a null-terminated
+;; 16-bit number that might be preceeded with a minus sign.
+readsign16
+.(
+  jsr pop16         ; move the string address into stackaccess
+
+  dex               ; make some workspace on the stack. need two 16-byte
+  dex               ; words, one of which will eventually be our result
+  dex               ; so, workspace space is stackbase+1,x to stackbase+4,x
+  dex
+  stz stackbase+1,x ; zero out both 16-bit values
+  stz stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  phy               ; preserve y
+  ldy #0            ; y indexes digits of the input string
+
+  ;; first, check if the first character is a minus
+  lda (stackaccess),y
+  cmp #$2d
+  bne nextdigit     ; it is not, so proceed as usual
+  lda #1            ; set a flag; we'll process this later
+  sta SCRATCH
+  iny
+
+nextdigit
+  lda (stackaccess),y
+
+  sec
+  sbc #$30          ; turn from ascii digit into a number
+  clc               ; add it to our partial result
+  adc stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+  iny               ; bump the character count
+  cpy #5            ; was that the last digit to be read? (max 5)
+  beq donelastdigit  
+  lda (stackaccess),y
+  beq donelastdigit ; stop stop if we hit null-terminator
+mult10              ; more digits, so multiply by ten and go around
+  asl stackbase+3,x ; shift left to multiply by two
+  rol stackbase+4,x
+
+  lda stackbase+3,x ; make a copy in the other temporary slot
+  sta stackbase+1,x
+  lda stackbase+4,x
+  sta stackbase+2,x
+  asl stackbase+1,x ; shift the copy left twice more, so x8 in total
+  rol stackbase+2,x
+  asl stackbase+1,x
+  rol stackbase+2,x
+
+  clc               ; add them (8x + 2x = 10x)
+  lda stackbase+1,x
+  adc stackbase+3,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  adc stackbase+4,x
+  sta stackbase+4,x
+
+  bra nextdigit
+donelastdigit
+  ;; if we began with a minus, then calculate the two's complement
+  ;; of the number we have read.
+  lda SCRATCH
+  beq finish        ; no minus flag set
+
+  ;; first, calculate 1's complement -- flip all bits
+  lda stackbase+3,x
+  eor #$ff
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  sta stackbase+4,x
+
+  ;; now add 1 to generate the two's complement
+  clc
+  lda stackbase+3,x
+  adc #1
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+finish
+  inx               ; drop one of the temporary variables
+  inx               ; but leave the other, which is our result
+  ply               ; restore y
+.)
+  rts
+
+
+;;; Print a 16-bit number, bearing in mind that it might be negative.
+;;;
+print16sign
+  ;; create myself three bytes of storage on the stack
+.(
+  dex
+  dex
+  dex
+  
+  ;; that leaves the data to be read at stackbase+4,x and stackbase+5,x
+  
+  stz stackbase+1,x ; dec0
+  stz stackbase+2,x ; dec1
+  stx stackbase+3,x ; dec2
+
+  ;; always print a space
+  lda #$20
+  jsr puta
+
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+5,x
+  bit #%1000000
+  beq nominus
+
+  lda #$2d          ; minus sign
+  jsr puta
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  lda stackbase+4,x
+  eor #$ff
+  sta stackbase+4,x
+  lda stackbase+5,x
+  eor #$ff
+  sta stackbase+5,x
+  clc
+  lda stackbase+4,x
+  adc #1
+  sta stackbase+4,x
+  lda stackbase+5,x
+  adc #0
+  sta stackbase+5,x
+
+  ;; continue with printing
+
+nominus
+  phy               ; preserve Y
+  lda #0
+  sed
+  ldy #16           ; count of bits we are processing
+
+.(
+loop
+  asl stackbase+4,x
+  rol stackbase+5,x
+  lda stackbase+1,x
+  adc stackbase+1,x
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc stackbase+2,x
+  sta stackbase+2,x
+  rol stackbase+3,x
+  dey
+  bne loop
+.)
+  cld
+
+  ;; we have the result in the temporary storage, as BCD. now print that as
+  ;; a five-character string (since max is 65535).
+  ;; could do this using y as an index and looping.. rather than unrolling
+  ;; as here
+
+  ;; set a flag to determine whether we've printed anything non-zero
+  stz SCRATCH
+
+  ;; decimal 2
+  ;; mask off lower four bits
+  lda stackbase+3,x
+  and #%00001111
+  clc
+  adc #'0
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec1up        ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+dec1up
+  ;; decimal 1
+  ;; first, upper four bits
+  lda stackbase+2,x
+  and #%11110000
+  clc
+  ror
+  ror
+  ror
+  ror
+  clc
+  adc #'0
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec1low       ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+dec1low
+  ;; and then lower four bits
+  lda stackbase+2,x
+  and #%00001111
+  clc
+  adc #'0
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec0up        ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+dec0up
+  ;; and finally decimal 0
+  ;; first, upper four bits
+  lda stackbase+1,x
+  and #%11110000
+  clc
+  ror
+  ror
+  ror
+  ror
+  clc
+  adc #'0
+.(
+  cmp #'0
+  bne continue      ; not a zero, so proceed to printing
+  bit SCRATCH       ; is this a leading zero (have we printed anything?)
+  beq dec0low       ; nothing printed yet, so skip this digit
+continue
+  jsr puta          ; print the digit
+.)
+  lda #$ff          ; note that printing has begun (no more leading zeros)
+  sta SCRATCH
+
+dec0low
+  ;; and then lower four bits -- last digit, so no check for zero
+  lda stackbase+1,x
+  and #%00001111
+  clc
+  adc #'0
+  jsr puta
+
+  ;; clean up -- reclaim our temporary space and also pop item from stack
+  ply              ; restore Y
+  inx              ; clean up our three bytes
+  inx
+  inx
+  inx              ; popping (discard result)
+  inx              ; second byte
+.)
+  rts
+
+
+
+
 
 
 hextable:        .byte "0123456789ABCDEF"
