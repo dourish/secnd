@@ -977,6 +977,23 @@ d100link
 d100code
   .word dotick
 
+;d101entry
+;  .byte %00100011   ; IMM plus count of three
+;  .byte "?do"
+;d101llink
+;  d100entry
+;d101code
+;  .word doqdo
+;
+;dtop
+;d102entry
+;  .byte 5
+;  .byte "(?do)"
+;d102link
+;  .word d101entry
+;parenqdocode
+;d102code
+;  .word doparenqdo
 
 ;; TOP OF DICTIONARY
 
@@ -2599,11 +2616,10 @@ nocompile
 ;;; doparendo). It compiles in (do) and then pushes the next instruction
 ;;; address (the loop target) onto the stack along with a flag.
 dodo
-.(
   ;; test if we're compiling
   lda STATUS
   bit #COMPILE
-  beq nocompile
+  beq nocompiledo
 
   ;; compile (do)
   lda #<parendocode
@@ -2611,6 +2627,8 @@ dodo
   ldy #1
   lda #>parendocode
   sta (DP),y
+
+doshared            ; entry point for do-query-do below
 
   ;; increment DP
 .(
@@ -2639,9 +2657,29 @@ skipmsb
 
   jmp next          ; done!
 
-nocompile
+nocompiledo
   jmp abortcompile
-.)
+
+;;; doqdo is the compile-time code for ?DO, much of which is shared with
+;;; do above.
+;doqdo
+;.(
+;  ;; test if we're compiling
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompiledo
+;
+;  ;; compile (do)
+;  lda #<parenqdocode
+;  sta (DP)
+;  ldy #1
+;  lda #>parenqdocode
+;  sta (DP),y
+;
+;  jmp doshared
+;
+; realized that this is wrong. i need a forward branch in the case of
+; the null loop. maybe make it look like a leave?
 
 
 ;;; doparendo is the implementation of (DO), the run-time behavior for
@@ -4614,7 +4652,9 @@ wait_rxd_full
   lda ACIA_DATA
   cmp #$08           ; check for backspace
   beq backspace
-  cmp #$0D           ; check for newline
+  cmp #$0D           ; check for newline (carriage return)
+  beq doneline
+  cmp #$0A           ; also allow line feed to terminate line
   beq doneline
   sta INPUT,y        ; track the input
   iny
@@ -5032,7 +5072,7 @@ skip
   ply              ; restore Y
   txa              ; clearing five bytes off the stack
   clc              ; (three for working space and two for the value)
-  sbc #5
+  adc #5
   tax
 .)
   rts
