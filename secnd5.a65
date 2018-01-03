@@ -901,7 +901,6 @@ d91link
 d91code
   .word doabs
 
-dtop
 d92entry
   .byte 6
   .byte "negate"
@@ -909,6 +908,56 @@ d92link
   .word d91entry
 d92code
   .word donegate
+
+d93entry
+  .byte 4
+  .byte "pick"
+d93link
+  .word d92entry
+d93code
+  .word dopick
+
+d94entry
+  .byte 4
+  .byte "?dup"
+d94link
+  .word d93entry
+d94code
+  .word doquerydup
+
+d95entry
+  .byte 2
+  .byte "+!"
+d95link
+  .word d94entry
+d95code
+  .word doplusstore
+
+d96entry
+  .byte 2
+  .byte ".s"
+d96link
+  .word d95entry
+d96code
+  .word dodots
+
+d97entry
+  .byte %00100001   ; IMM plus count of 1
+  .byte "("
+d97link
+  .word d96entry
+d97code
+  .word docomment
+
+dtop
+d98entry
+  .byte 4
+  .byte "/mod"
+d98link
+  .word d97entry
+d98code
+  .word dodivmod
+
 
 ;; TOP OF DICTIONARY
 
@@ -1078,6 +1127,23 @@ domod
   jsr mod16
   jmp next
 
+dodivmod
+  jsr divmod16
+  ;; that leaves the stack in a bit of a mess. clean up.
+  lda stackbase+1,x ; move modulus from +1 and +3 to +7 and +8
+  sta stackbase+7,x
+  lda stackbase+2,x
+  sta stackbase+8,x
+  lda stackbase+3,x ; move quotient from +3 and +4 to +5 and +6
+  sta stackbase+5,x
+  lda stackbase+4,x
+  sta stackbase+6,x
+  inx               ; drop working values off the stack, leaving
+  inx               ; modulos and quotient in the right places
+  inx
+  inx
+  jmp next
+
 doprint
   jsr print16sign
   jmp next
@@ -1097,6 +1163,50 @@ dodrop
 doswap
   jsr swap16
   jmp next
+
+;;; Implements PICK. When given a parameter over, say, 64, this is
+;;; likely to go very wrong.
+dopick
+  jsr pop16         ; pop value off the stack
+  asl stackaccess   ; multiply by two to convert to bytes
+  rol stackaccess+1
+  clc
+  lda stackaccess   ; add that to stackbase
+  adc #<stackbase
+  sta stackaccess
+  lda stackaccess+1
+  adc #>stackbase
+  sta stackaccess+1
+  clc
+  txa               ; now add X + 1
+  inc
+  adc stackaccess
+  sta stackaccess
+  lda stackaccess+1
+  adc #0
+  sta stackaccess+1
+
+  dex
+  dex
+  ldy #0
+  lda (stackaccess),y
+  sta stackbase+1,x
+  iny
+  lda (stackaccess),y
+  sta stackbase+2,x
+
+  jmp next 
+
+
+doquerydup
+.(
+  lda stackbase+1,x
+  ora stackbase+2,x
+  beq done
+  jsr dup16
+done
+  jmp next
+.)
 
 dorshift
 .(
@@ -1424,6 +1534,22 @@ dostore
   inx               ; drop the value from the stack
   inx
   jmp next
+
+;;; doplusstore is the code for +!
+doplusstore
+  jsr pop16         ; put address into stackaccess
+  clc
+  ldy #1
+  lda stackbase+1,x  ; load LSB off stack and
+  adc (stackaccess)
+  sta (stackaccess)    ; store at location we popped
+  lda stackbase+2,x    ; then for MSB
+  adc (stackaccess),y
+  sta (stackaccess),y  ; with y=1
+  inx               ; drop the value from the stack
+  inx
+  jmp next
+
 
 ;;; cstore is just like store except stores just one byte (LSB from stack)
 docstore
@@ -2060,6 +2186,24 @@ finished
 
   rts
 
+
+;;; discardcomment reads from the input buffer until it finds
+;;; the end-of-comment marker. Somewhat like assemblestr except
+;;; that there is no assembly.
+discardcomment
+.(
+continue
+  jsr readnext
+
+  lda WORD
+  cmp #$01
+  bne continue
+  lda WORD+1
+  cmp #$29          ; 0x29 is closing parenthesis
+  bne continue
+
+  rts
+.)
 
 
 ;;; dotype implements TYPE. Reads a count and a string address from the
@@ -3310,6 +3454,14 @@ dobackslsh
   jmp next
 
 
+;;; do comment. this is called as an immediate word. it basically
+;;; skips ahead in the input buffer until it reads a word that is
+;;; a singular closing parenthesis by itself.
+docomment
+  jsr discardcomment
+  jmp next
+
+
 doabs
 .(
   lda stackbase+2,x ; is number on stack negative?
@@ -3332,6 +3484,34 @@ donegate
   eor #$ff
   adc #0
   sta stackbase+2,x
+  jmp next
+
+;;; Implements .S, which prints the stack, mainly for debugging.
+;;; Can't mess with X because we need to keep it as a working stack
+;;; pointer ('cos we need to put numbers on the top of the stack
+;;; to print them!
+dodots
+.(
+  ;; first, cache a copy of the stack pointer
+  txa
+  sta SCRATCH+8
+  ;; then set Y to the bottom of the stack
+  ldy #$ff
+loop
+  cpy SCRATCH+8     ; when we hit the saved stack pointer, stop
+  beq done
+  dey               ; move to next stack location
+  dey
+  dex               ; make space on the top of the stack
+  dex
+  lda stackbase+1,y ; copy from location pointed to by Y
+  sta stackbase+1,x ; into new top-of-stack position
+  lda stackbase+2,y
+  sta stackbase+2,x
+  jsr print16sign   ; that will also pop the copy from the stack
+  bra loop
+done
+.)
   jmp next
 
 ;;;
@@ -4014,8 +4194,8 @@ interploop
   ;; the text buffer in the process
   jsr readnext
 
-  ;; check for match
-
+  ;; search for a match in the dictionary
+  ;;
 matchword
   ;; set up search by initializing dictionary pointer
   lda DT
@@ -4072,7 +4252,6 @@ trynext
   ;; we found a match for a word to execute. Set up the context
   ;; and call NEXT to get started.
 gotmatch
-
   ;; first, check if we're compiling. if we are not, then we can continue
   lda STATUS
   bit #COMPILE
@@ -4140,11 +4319,11 @@ nocompile
   ;; jump to NEXT to start running it
   jmp next
 
+
   ;; we didn't find a match in the dictionary, so see if we can parse
   ;; it as a number.
 nomatch
   ;; before we do the conversion, check that all the letters are digits
-
   ldy WORD
 numcheck
 .(
@@ -4620,7 +4799,7 @@ nextdigit
   adc #0
   sta stackbase+4,x
   iny               ; bump the character count
-  cpy #5            ; was that the last digit to be read? (max 5)
+  cpy #6            ; was that the last digit? (max 6 inc. minus)
   beq donelastdigit  
   lda (stackaccess),y
   beq donelastdigit ; stop stop if we hit null-terminator
@@ -4690,7 +4869,7 @@ print16sign
   
   stz stackbase+1,x ; dec0
   stz stackbase+2,x ; dec1
-  stx stackbase+3,x ; dec2
+  stz stackbase+3,x ; dec2
 
   ;; always print a space
   lda #$20
