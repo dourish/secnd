@@ -960,7 +960,6 @@ d98link
 d98code
   .word dodivmod
 
-dtop
 d99entry
   .byte 6
   .byte "forget"
@@ -968,6 +967,15 @@ d99link
   .word d98entry
 d99code
   .word doforget
+
+dtop
+d100entry
+  .byte 1           ; not immediate though, right? BUG
+  .byte $27         ; tick
+d100link
+  .word d99entry
+d100code
+  .word dotick
 
 
 ;; TOP OF DICTIONARY
@@ -3525,6 +3533,24 @@ done
 .)
   jmp next
 
+;;; dotick implements TICK ('). Grabs a word and looks is up in the
+;;; dictionary, leaving the xt on the stack. Short and sweet...
+dotick
+  jsr readnext
+  jsr dictmatch
+
+  clc               ; calculate xt. Add length of word, plus one for
+  lda (DPTR)        ; the length byte and two for the link
+  and #%00011111    ; mask off the status bits
+  adc #3            ; max count value is 32, so this won't cause carry
+  adc DPTR
+  sta stackaccess
+  lda DPTR+1
+  adc #0            ; in case of carry
+  sta stackaccess+1
+
+  jsr push16
+  jmp next
 
 ;;; doforget implements FORGET. Uses the same dictionary matching
 ;;; routine as the text interpreter (I'm gradually breaking this stuff
