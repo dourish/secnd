@@ -4987,28 +4987,23 @@ loop
   ;; set a flag to determine whether we've printed anything non-zero
   stz SCRATCH
 
-  ;; decimal 2
-  ;; mask off lower four bits
-  lda stackbase+3,x
-  and #%00001111
-  clc
-  adc #'0
-.(
-  cmp #'0
-  bne continue      ; not a zero, so proceed to printing
-  bit SCRATCH       ; is this a leading zero (have we printed anything?)
-  beq dec1up        ; nothing printed yet, so skip this digit
-continue
-  jsr puta          ; print the digit
-.)
-  lda #$ff          ; note that printing has begun (no more leading zeros)
-  sta SCRATCH
+  txa
+  adc #<stackbase
+  sta SCRATCH+2
+  lda #>stackbase
+  sta SCRATCH+3
+  ldy #3
 
-dec1up
-  ;; decimal 1
+.(
+nextdec             ; go through this loop for each BCD digit
+
   ;; first, upper four bits
-  lda stackbase+2,x
+  lda (SCRATCH+2),y
   and #%11110000
+  bne prupper       ; not zero, so we definitely print it
+  cmp SCRATCH       ; check if we are still suppressing zeros
+  beq lower         ; yes, we are. move on.
+prupper
   clc
   ror
   ror
@@ -5016,72 +5011,35 @@ dec1up
   ror
   clc
   adc #'0
-.(
-  cmp #'0
-  bne continue      ; not a zero, so proceed to printing
-  bit SCRATCH       ; is this a leading zero (have we printed anything?)
-  beq dec1low       ; nothing printed yet, so skip this digit
-continue
   jsr puta          ; print the digit
-.)
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
-dec1low
-  ;; and then lower four bits
-  lda stackbase+2,x
+lower
+  lda (SCRATCH+2),y
   and #%00001111
+  bne prlower       ; non-zero so we definitely print it
+  cmp SCRATCH       ; test for suppressing leading zeros
+  beq skip
+prlower
   clc
   adc #'0
-.(
-  cmp #'0
-  bne continue      ; not a zero, so proceed to printing
-  bit SCRATCH       ; is this a leading zero (have we printed anything?)
-  beq dec0up        ; nothing printed yet, so skip this digit
-continue
   jsr puta          ; print the digit
-.)
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
-dec0up
-  ;; and finally decimal 0
-  ;; first, upper four bits
-  lda stackbase+1,x
-  and #%11110000
-  clc
-  ror
-  ror
-  ror
-  ror
-  clc
-  adc #'0
-.(
-  cmp #'0
-  bne continue      ; not a zero, so proceed to printing
-  bit SCRATCH       ; is this a leading zero (have we printed anything?)
-  beq dec0low       ; nothing printed yet, so skip this digit
-continue
-  jsr puta          ; print the digit
+skip
+  dey
+  bne nextdec
 .)
-  lda #$ff          ; note that printing has begun (no more leading zeros)
-  sta SCRATCH
 
-dec0low
-  ;; and then lower four bits -- last digit, so no check for zero
-  lda stackbase+1,x
-  and #%00001111
-  clc
-  adc #'0
-  jsr puta
 
   ;; clean up -- reclaim our temporary space and also pop item from stack
   ply              ; restore Y
-  inx              ; clean up our three bytes
-  inx
-  inx
-  inx              ; popping (discard result)
-  inx              ; second byte
+  txa              ; clearing five bytes off the stack
+  clc              ; (three for working space and two for the value)
+  sbc #5
+  tax
 .)
   rts
 
