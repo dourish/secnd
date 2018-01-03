@@ -949,7 +949,6 @@ d97link
 d97code
   .word docomment
 
-dtop
 d98entry
   .byte 4
   .byte "/mod"
@@ -957,6 +956,15 @@ d98link
   .word d97entry
 d98code
   .word dodivmod
+
+dtop
+d99entry
+  .byte 6
+  .byte "forget"
+d99link
+  .word d98entry
+d99code
+  .word doforget
 
 
 ;; TOP OF DICTIONARY
@@ -3514,6 +3522,41 @@ done
 .)
   jmp next
 
+
+;;; doforget implements FORGET. Uses the same dictionary matching
+;;; routine as the text interpreter (I'm gradually breaking this stuff
+;;; out so that it can be used more generically).
+doforget
+.(
+  jsr readnext      ; read next word from input stream
+  jsr dictmatch     ; look for a match
+  lda DPTR
+  ora DPTR+1
+  beq nomatch
+  lda (DPTR)        ; load the word count for this entry
+  inc               ; and add one for the count byte
+  clc               ; and add to DPTR, so that it points to the link
+  adc DPTR
+  sta DPTR
+  lda DPTR+1
+  adc #0
+  sta DPTR+1
+
+  ldy #1            ; reset top of dictionary to the word preceeding
+  lda (DPTR)        ; the word we are forgetting
+  sta DT
+  lda (DPTR),y
+  sta DT+1
+  bra done  
+  ;; BUG reset DP in here too to reuse space? not sure how safe.
+
+nomatch
+  ;; issue an error
+
+done
+  jmp next
+.)
+
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
 ;;;
@@ -4196,58 +4239,10 @@ interploop
 
   ;; search for a match in the dictionary
   ;;
-matchword
-  ;; set up search by initializing dictionary pointer
-  lda DT
-  sta DPTR
-  lda DT+1
-  sta DPTR+1
-
-nextentry
-  ;; have we run out of dictionary entries? (when DPTR is $0000)
-  lda DPTR
-  bne compareentry
-  lda DPTR+1
+  jsr dictmatch
+  lda DPTR          ; check for no match (DPTR is 0000)
+  ora DPTR+1
   beq nomatch
-
-compareentry
-  ;; compare words. counted strings can be compared directly;
-  ;; byte by byte will compare counts first. But we need to
-  ;; mask out the tags in the count.
-
-  ldy #0
-  lda (DPTR),y
-  and #%00011111    ; mask off the tags
-  cmp WORD,y        ; compare word lengths
-  bne trynext       ; no match
-
-  ;; now compare words. do this from the end (for easier testing)
-  ldy WORD
-.(
-nextchar
-  lda (DPTR),y
-  cmp WORD,y
-  bne trynext
-  dey
-  bne nextchar
-.)
-  ;; successful match!
-  bra gotmatch
-  
-  ;; loop to next entry
-trynext
-  lda (DPTR)        ; get word length...
-  and #%00011111    ; mask off the tags
-  tay               ; store in Y, and add one...
-  iny               ; for the pointer to the next entry
-  lda (DPTR),y      ; update DPTR to point to next entry
-  sta SCRATCH
-  iny
-  lda (DPTR),y  
-  sta DPTR+1
-  lda SCRATCH
-  sta DPTR
-  bra nextentry
 
   ;; we found a match for a word to execute. Set up the context
   ;; and call NEXT to get started.
@@ -4436,6 +4431,66 @@ wait_txd_empty3
 .)
 
   jmp abortnotdef
+
+
+;;; dictmatch looks up a word in the dictionary. The word being
+;;; matched is indicated by WORD< which holds a pointer to a
+;;; counted string. On exist, DPTR either points to the entry
+;;; for the word, or 0000 in case of no match.
+dictmatch
+  ;; set up search by initializing dictionary pointer
+  lda DT
+  sta DPTR
+  lda DT+1
+  sta DPTR+1
+
+nextentry
+  ;; have we run out of dictionary entries? (when DPTR is $0000)
+  lda DPTR
+  bne compareentry
+  lda DPTR+1
+  beq return
+
+compareentry
+  ;; compare words. counted strings can be compared directly;
+  ;; byte by byte will compare counts first. But we need to
+  ;; mask out the tags in the count.
+
+  ldy #0
+  lda (DPTR),y
+  and #%00011111    ; mask off the tags
+  cmp WORD,y        ; compare word lengths
+  bne trynext       ; no match
+
+  ;; now compare words. do this from the end (for easier testing)
+  ldy WORD
+.(
+nextchar
+  lda (DPTR),y
+  cmp WORD,y
+  bne trynext
+  dey
+  bne nextchar
+.)
+  ;; successful match!
+  bra return
+  
+  ;; loop to next entry
+trynext
+  lda (DPTR)        ; get word length...
+  and #%00011111    ; mask off the tags
+  tay               ; store in Y, and add one...
+  iny               ; for the pointer to the next entry
+  lda (DPTR),y      ; update DPTR to point to next entry
+  sta SCRATCH
+  iny
+  lda (DPTR),y  
+  sta DPTR+1
+  lda SCRATCH
+  sta DPTR
+  bra nextentry
+return
+  rts
 
 
 ;;; readnext
