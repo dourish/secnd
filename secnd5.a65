@@ -20,7 +20,8 @@
 ;;; v03  first steps for compiler, basic lists, strings, loops, conditionals
 ;;; v04  rounding out vocabulary, linking more internal operations to
 ;;;      external words, adding nest checking
-;;; v05  recursion, double-length arithmetic, pair operations
+;;; v05  recursion, double-length arithmetic, pair operations, signed
+;;;      arithmetic
 
   * = $0300
 
@@ -4712,41 +4713,6 @@ rpull
 ;;; These have been "borrowed" from mitemon
 ;;;
 
-putax
-.(
-  phy
-
-  pha
-wait_txd_empty
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  pla
-  pha             ; put a copy back
-  clc
-  and #$f0
-  ror
-  ror
-  ror
-  ror
-  tay
-  lda hextable,y
-  sta ACIA_DATA
-wait_txd_empty2
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty2
-  pla
-  clc
-  and #$0f
-  tay
-  lda hextable,y
-  sta ACIA_DATA
-.)
-  ply
-  rts
-
-
 puta
 .(
   pha
@@ -5043,12 +5009,15 @@ skip
 .)
   rts
 
+;;; this is just here because the stack code needs it... should
+;;; reoganize my files...
+putax
+  rts
+
+;;; STRING CONSTANTS
+;;;
 
 
-
-
-
-hextable:        .byte "0123456789ABCDEF"
 greeting	 .byte "SECND 6502 Forth v05 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
