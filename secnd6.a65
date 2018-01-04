@@ -1107,14 +1107,13 @@ dolist
 ;;; NEXT executes the next word. Before it does the jump, it increments
 ;;; IP so that IP always designates the next word to be executed.
 next
-  ldy #0            ; IP points to the location storing the next
-  lda (IP),y        ; word we need to execute. fetch that location,
+  ldy #1            ; IP points to the location storing the next
+  lda (IP)          ; word we need to execute. fetch that location,
   sta XT            ; and store it in XT.
-  iny
   lda (IP),y
   sta XT+1
 
-  lda (XT),y        ; TMP contains a pointer to a code word. Load
+  lda (XT),y        ; XT contains a pointer to a code word. Load
   sta CODEVEC+1     ; the code address stored there into CODEVEC.
   dey
   lda (XT)
@@ -1293,11 +1292,11 @@ doequal
   cmp stackbase+4,x
   bne notequal
 equal
-  inx
+  inx               ; drop one cell off stack (we'll fill in the other)
   inx
   jmp settrue
 notequal
-  inx
+  inx               ; drop one cell off stack (we'll fill in the other)
   inx
   jmp setfalse
 .)
@@ -1312,33 +1311,22 @@ donotequal
   cmp stackbase+4,x
   bne notequal
 equal
-  inx
+  inx               ; drop one cell off stack (we'll fill in the other)
   inx
   jmp setfalse
 notequal
-  inx
+  inx               ; drop one cell off stack (we'll fill in the other)
   inx
   jmp settrue
 .)
 
 
-;; on the 6502, there's no simple "greater than" instruction;
-;; BCS is "greater than or equal to". So, use BCC for "less than"
-;; and invert result. also need different tests for upper and
-;; lower bytes. This is also confused by the fact that the item that's
-;; "lower" on the stack is higher in memory.
+;;; No 16-bit comparisons, so for signed arithmetic, we basically
+;;; have to do a subtraction and then test for overflow. this
+;;; routine is borrowed from fig6502 and I'm still not sure what
+;;; the EOR is for, if anything.
 dogreater
 .(
-;  lda stackbase+4,x ; most significant byte
-;  cmp stackbase+2,x ; is "lower" on stack less than "upper"?
-;  beq testlsb       ; equal, so go to lower byte
-;  bmi notgreater    ; less than, so answer is "no"
-;  bra greater       ; greater than, so answer is "yes"
-;testlsb
-;  lda stackbase+3,x ; less signficant byte
-;  cmp stackbase+1,x ; is "higher" on stack less than "lower"?
-;  beq notgreater
-;  bmi notgreater
   sec
   lda stackbase+1,x
   sbc stackbase+3,x
@@ -1358,27 +1346,9 @@ here
 .)
 
 
+;;; See dogreater above.
 doless
 .(
-;  lda stackbase+4,x
-;  cmp stackbase+2,x
-;  bmi yes
-;  beq testlsb
-;  bra no
-;testlsb
-;  lda stackbase+3,x
-;  cmp stackbase+1,x
-;  beq no
-;  bpl no
-;yes
-;  inx
-;  inx
-;  jmp settrue
-;no
-;  inx
-;  inx
-;  jmp setfalse
-;done
   sec
   lda stackbase+3,x
   sbc stackbase+1,x
@@ -1418,6 +1388,8 @@ doemit
   inx
   jmp next
 
+;;; Implements OVER. We do everything inline here rather than using
+;;; push and poop.
 doover
   dex
   dex
@@ -1427,6 +1399,8 @@ doover
   sta stackbase+2,x
   jmp next
 
+;;; Implements ROT. We do everything inline here rather than using
+;;; push and poop.
 dorot
   dex               ; make some new space on the stack temporarily
   dex
@@ -1458,16 +1432,18 @@ dorot
 ;;; the next parameter as a value to be pushed onto the stack.
 ;;; We enter with IP indicating the literal value; we increment IP
 ;;; by two bytes (one cell) so that skips to the next instruction to be
-;;; executed.
+;;; executed. Since this is a very frequently executed routine, 
+;;; the push is unrolled rather than doing a jsr push16.
+;;; 
 ;;; (wouldn't "(literal)" be a more consistent name for this?)
 dolit
-  ldy #0            ; load the value there
+  dex               ; make space on the stack
+  dex
+  lda (IP)          ; load the value at the instruction pointer
+  sta stackbase+1,x
+  ldy #1            ; and MSB
   lda (IP),y
-  sta stackaccess   ; and store in stackaccess
-  iny               ; (now the second byte)
-  lda (IP),y
-  sta stackaccess+1
-  jsr push16        ; add to the data stack
+  sta stackbase+2,x
 
 .(
   clc
@@ -1511,20 +1487,15 @@ dostrlit
 ;;; XT and use it to find the address reserved for the variable, and
 ;;; push that. (Similarly this should perhaps be called "(VARIABLE)").
 dovaddr
-  lda XT
-  sta stackaccess
-  lda XT+1
-  sta stackaccess+1
-.(
+  dex               ; make space on the stack
+  dex
   clc
-  lda stackaccess   ; add two bytes (one cell) to find param area
+  lda XT            ; find the param space, two bytes after the XT
   adc #2
-  sta stackaccess
-  bcc continue
-  inc stackaccess+1
-continue
-.)
-  jsr push16        ; push the address
+  sta stackbase+1,x ; and store it on top of the stack
+  lda XT+1          ; same for MSB
+  adc #0
+  sta stackbase+2,x
   jmp next
 
 ;;; As above, but for constants, so we don't load the address,
@@ -1564,7 +1535,7 @@ dofetch
   sta stackbase+2,x
   jmp next
 
-;;; docfetch is the same as dofetch except for just one byte
+;;; docfetch implements c@ -- same as dofetch but loads just one byte
 docfetch
   jsr pop16         ; pop address into stackaccess
   dex               ; make space on the stack
@@ -1605,7 +1576,7 @@ doplusstore
   jmp next
 
 
-;;; cstore is just like store except stores just one byte (LSB from stack)
+;;; cstore implements "c!" - like store but just one byte (LSB from stack)
 docstore
   jsr pop16         ; put address into stackaccess
   lda stackbase+1,x ; load LSB off stack and
