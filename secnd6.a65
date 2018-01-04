@@ -968,7 +968,6 @@ d99link
 d99code
   .word doforget
 
-dtop
 d100entry
   .byte 1           ; not immediate though, right? BUG
   .byte $27         ; tick
@@ -976,6 +975,23 @@ d100link
   .word d99entry
 d100code
   .word dotick
+
+d101entry
+  .byte 9
+  .byte "immediate"
+d101link
+  .word d100entry
+d101code
+  .word doimmed
+
+dtop
+d102entry
+  .byte 7
+  .byte "dnegate"
+d102link
+  .word d101entry
+d102code
+  .word donegate32
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1279,18 +1295,12 @@ doequal
 equal
   inx
   inx
-  lda #$01
-  sta stackbase+1,x
-  stz stackbase+2,x
-  bra done
+  jmp settrue
 notequal
   inx
   inx
-  stz stackbase+1,x
-  stz stackbase+2,x
-done
+  jmp setfalse
 .)
-  jmp next
 
 
 donotequal
@@ -1304,18 +1314,12 @@ donotequal
 equal
   inx
   inx
-  stz stackbase+1,x
-  stz stackbase+2,x
-  bra done
+  jmp setfalse
 notequal
   inx
   inx
-  lda #$01
-  sta stackbase+1,x
-  stz stackbase+2,x
-done
+  jmp settrue
 .)
-  jmp next
 
 
 ;; on the 6502, there's no simple "greater than" instruction;
@@ -1325,59 +1329,74 @@ done
 ;; "lower" on the stack is higher in memory.
 dogreater
 .(
-  lda stackbase+4,x ; most significant byte
-  cmp stackbase+2,x ; is "lower" on stack less than "upper"?
-  beq testlsb       ; equal, so go to lower byte
-  bmi notgreater    ; less than, so answer is "no"
-  bra greater       ; greater than, so answer is "yes"
-testlsb
-  lda stackbase+3,x ; less signficant byte
-  cmp stackbase+1,x ; is "higher" on stack less than "lower"?
-  beq notgreater
-  bmi notgreater
-greater
+;  lda stackbase+4,x ; most significant byte
+;  cmp stackbase+2,x ; is "lower" on stack less than "upper"?
+;  beq testlsb       ; equal, so go to lower byte
+;  bmi notgreater    ; less than, so answer is "no"
+;  bra greater       ; greater than, so answer is "yes"
+;testlsb
+;  lda stackbase+3,x ; less signficant byte
+;  cmp stackbase+1,x ; is "higher" on stack less than "lower"?
+;  beq notgreater
+;  bmi notgreater
+  sec
+  lda stackbase+1,x
+  sbc stackbase+3,x
+  lda stackbase+2,x
+  sbc stackbase+4,x
+  bvc there
+  eor #$80
+there
+  bpl here
   inx
   inx
-  lda #$01
-  sta stackbase+1,x
-  stz stackbase+2,x
-  bra done
-notgreater
+  jmp settrue
+here
   inx
   inx
-  stz stackbase+1,x
-  stz stackbase+2,x
-done
+  jmp setfalse
 .)
-  jmp next
+
 
 doless
 .(
-  lda stackbase+4,x
-  cmp stackbase+2,x
-  bmi yes
-  beq testlsb
-  bra no
-testlsb
+;  lda stackbase+4,x
+;  cmp stackbase+2,x
+;  bmi yes
+;  beq testlsb
+;  bra no
+;testlsb
+;  lda stackbase+3,x
+;  cmp stackbase+1,x
+;  beq no
+;  bpl no
+;yes
+;  inx
+;  inx
+;  jmp settrue
+;no
+;  inx
+;  inx
+;  jmp setfalse
+;done
+  sec
   lda stackbase+3,x
-  cmp stackbase+1,x
-  beq no
-  bpl no
-yes
+  sbc stackbase+1,x
+  lda stackbase+4,x
+  sbc stackbase+2,x
+  bvc there
+  eor #$80
+there
+  bpl here
   inx
   inx
-  lda #$01
-  sta stackbase+1,x
-  stz stackbase+2,x
-  bra done
-no
+  jmp settrue
+here
   inx
   inx
-  stz stackbase+1,x
-  stz stackbase+2,x
-done
+  jmp setfalse
 .)
-  jmp next
+
 
 dodepth
   stx SCRATCH
@@ -1405,7 +1424,7 @@ doover
   lda stackbase+5,x
   sta stackbase+1,x
   lda stackbase+6,x
-  lda stackbase+2,x
+  sta stackbase+2,x
   jmp next
 
 dorot
@@ -1539,20 +1558,19 @@ dofetch
   dex               ; make space on the stack
   dex
   ldy #1
-  lda (stackaccess),y  ; load MSB and store on stack
-  sta stackbase+2,x    ; store in the new space on the stack
-  dey
+  lda (stackaccess)  ; load MSB and store on stack
+  sta stackbase+1,x    ; store in the new space on the stack
   lda (stackaccess),y  ; then LSB
-  sta stackbase+1,x
+  sta stackbase+2,x
   jmp next
 
 ;;; docfetch is the same as dofetch except for just one byte
 docfetch
-  jsr pop16         ; pop value into stackaccess
+  jsr pop16         ; pop address into stackaccess
   dex               ; make space on the stack
   dex
   stz stackbase+2,x ; set MSB to zero
-  lda (stackaccess) ; grab single byte
+  lda (stackaccess) ; grab single byte at the address
   sta stackbase+1,x ; and store in LSB
   jmp next
 
@@ -2878,24 +2896,22 @@ testandloop         ; also entry point for (+LOOP)
   lda (RP)
   sta SCRATCH+2
 
-  ;; compare it to the loop limit. if it's greater than or equal to,
-  ;; we will leave the loop.
+  ;; compare index to the loop limit
+.(
+  sec
+  lda SCRATCH       ; LSB, index
+  sbc SCRATCH+2     ; compared to LSB, limit
   lda SCRATCH+1
-  cmp SCRATCH+3
-  bmi takeloop      ; bmi means that +3 (limit) is greater than +1 (index)
-  beq testlsb       ; eq means we need to test further
-  bra noloop        ; otherwise, index is greater than limit, so we're done
-
-testlsb             ; we get here only if MSBs are equal
-  lda SCRATCH
-  cmp SCRATCH+2
-  bmi takeloop      ; index still less than limit, so we take the loop
-  bra noloop        ; otherwise, quit the loop
-
+  sbc SCRATCH+3
+;  bvc hop
+;  eor #$80          ; what is this FOR?
+hop
+  bpl noloop
+.)
 
 takeloop
   ;; put index and limit back on return stack. (for limit, just inc
-  ;; RP, becuase it hasn't changed
+  ;; RP, becuase it's still there on the stack.
   inc RP
   inc RP
   lda SCRATCH
@@ -3209,33 +3225,27 @@ doxor
 
 
 ;;; implements 0=. Faster than "0 =" and works in place.
-
+;;; uses setfalse and settrue for result, which requires that X
+;;; be set appropriately for the result before we jump
 doeqlzero
 .(
   lda stackbase+1,x ; test for zero
   ora stackbase+2,x
   beq iszero        ; yes?
-
-  stz stackbase+1,x ; no... so we write in zero (for false)
-  bra done
-
+notzero
+  jmp setfalse
 iszero              ; yes it's zero
-  lda #1            ; so we return 1 (for true)
-  sta stackbase+1,x
-
-done
-  stz stackbase+2,x ; this byte is always zero, either way
+  jmp settrue
 .)
-  jmp next
-
 
 ;;; implements TRUE
 dotrue
   dex
   dex
-  lda #1
+settrue
+  lda #$ff
   sta stackbase+1,x
-  stz stackbase+2,x
+  sta stackbase+2,x
   jmp next
 
 
@@ -3243,6 +3253,7 @@ dotrue
 dofalse
   dex
   dex
+setfalse
   stz stackbase+1,x
   stz stackbase+2,x
   jmp next
@@ -3624,6 +3635,16 @@ done
   jmp next
 .)
 
+;;; doimmediate implements IMMEDIATE, which sets the IMMEDIATE flag
+;;; for the most recently defined word. Not sure if it should be
+;;; immediate itself! Most recently defined word is the one at the
+;;; top of the dictionary, ie at DT.
+doimmed
+  lda (DT)
+  ora #IMM
+  sta (DT)
+  jmp next          ; shortest instruction yet?
+
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
 ;;;
@@ -3721,6 +3742,26 @@ dosub32
   inx
   jmp next          ; done
 
+donegate32
+  clc
+  lda stackbase+1,x ; add one and flip bits to calculate two's complement
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  eor #$ff
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  adc #0
+  sta stackbase+4,x
+  jmp next
+
 
 ;;; test for equality for 32-bit numbers
 doeql32
@@ -3738,21 +3779,19 @@ doeql32
   cmp stackbase+8,x
   bne notequal
 equal
-  lda #$01          ; true = 1
-  sta stackbase+7,x
-  bra done
+  clc               ; clean up stack before setting result
+  txa
+  adc #6
+  tax
+  jmp settrue
 notequal
-  stz stackbase+7,x ; false = 0
-done
-  stz stackbase+8,x ; upper byte is zero either way
-  inx               ; drop upper double number
-  inx
-  inx
-  inx
-  inx               ; drop one cell of the lower double number
-  inx
+  clc               ; clean up stack before setting result
+  txa
+  adc #6
+  tax
+  jmp setfalse
 .)
-  jmp next
+
 
 
 ;;; compare a 32-bit number to zero
@@ -3764,17 +3803,15 @@ dozero32
   ora stackbase+4,x
   beq zero          ; zero?
 notzero
-  stz stackbase+3,x ; no == false == 0
-  bra done
-zero
-  lda #1            ; yes == true == 1
-  sta stackbase+3,x
-done
-  stz stackbase+4,x
-  inx               ; trim result down to single length
+  inx               ; clean up stack before setting result
   inx
+  jmp setfalse
+zero
+  inx               ; clean up stack before setting result
+  inx
+  jmp settrue
 .)
-  jmp next          ; done
+
 
 ;;; domultmix -- multiply two 16-bit numbers, giving a 32-bit result
 domultmix
@@ -4162,6 +4199,13 @@ skip
   bne nextdec
 .)
 
+  ;; check -- if we never printed anything, output a zero
+  lda SCRATCH
+  bne cleanup
+  lda #'0
+  jsr puta
+
+cleanup
   clc               ; nine bytes off the stack (five for working
   txa               ; space and four for the 32-bit number).
   adc #9
@@ -5067,7 +5111,12 @@ skip
   bne nextdec
 .)
 
+  lda SCRATCH      ; did we not print anything?
+  bne cleanup
+  lda #$30         ; print a zero
+  jsr puta
 
+cleanup
   ;; clean up -- reclaim our temporary space and also pop item from stack
   ply              ; restore Y
   txa              ; clearing five bytes off the stack
