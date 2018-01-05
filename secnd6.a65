@@ -22,8 +22,8 @@
 ;;;      external words, adding nest checking
 ;;; v05  recursion, double-length arithmetic, pair operations, signed
 ;;;      arithmetic
-;;; v06  cleaning up and debugging features, more internal operations
-;;;      available as Forth words.
+;;; v06  cleaning up and debugging, various new words, more internal
+;;;      elements available to Forth, performance improvements.
 
   * = $0300
 
@@ -76,6 +76,7 @@ DP=$005E            ; and 005F
 STATUS=$0060        ; status word
 CWORD=$0061         ; and 0062
 PADPTR=$0063        ; and 0064
+RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
@@ -121,9 +122,12 @@ coldstart
   stz STATUS        ; turn off compilation
 
   ;; Initialize the return stack. I'm just putting that on page 2, 
-  ;; growing upwards, until I have a better idea. 
-  stz RP
-  lda #$02
+  ;; growing downwards, until I have a better idea; I should probably
+  ;; combine with some other area because a whole page is much
+  ;; more space than needed
+  lda #$FF
+  sta RP
+  lda #>RBASE
   sta RP+1
 
   ;; Initialize DT to the last entry on the dictionary (below)
@@ -1110,15 +1114,13 @@ dummyexit
 ;;; DOLIST is the executing code for a colon-defined word.
 dolist
   ;; first, push the current instruction pointer onto the
-  ;; return stack
-  ;; NB-- this was previously done via jsr rpush but I unrolled it
-  ;; here to save some loads/stores and a JSR.
-  lda IP
-  sta (RP)
-  inc RP
+  ;; return stack (subroutine unrolled)
   lda IP+1
   sta (RP)
-  inc RP
+  dec RP
+  lda IP
+  sta (RP)
+  dec RP
 
   ;; next, grab the first address in the parameter block for this
   ;; colon-defined word. We know that XT points to the code word.
@@ -1173,14 +1175,13 @@ continue
 ;;; DOLIST... it removes an address from the return stack, puts it back
 ;;; as the instruction pointer, and calls next.
 exit
-  ;; formerly, jsr rpull, now unrolled.
-  dec RP            ; take two bytes off the return stack
-  dec RP
-  ldy #1            ; now take the value that was on the return stack
-  lda (RP),y        ; and place it in the instruction pointer
-  sta IP+1
+  ;; formerly jsr rpull, now unrolled.
+  inc RP            ; take value off return stack and put it in IP
   lda (RP)
   sta IP
+  inc RP
+  lda (RP)          ; and place it in the instruction pointer
+  sta IP+1
   jmp next          ; go execute the next instruction
 
 
@@ -1814,58 +1815,43 @@ done
 
 ;;; rcopy (for the Forth word "R") -- copy top of R stack onto data stack
 ;;; this code also implements I (since it's the same thing).
-;;; BUG there has to be a more efficient way to do this. if the R-stack
-;;; grew downwards, that would be easier... it would help LOOP too.
 dorcopy
-  dec RP
-  lda (RP)
-  sta stackaccess+1
-  dec RP
-  lda (RP)
-  sta stackaccess
-  inc RP
-  inc RP
-  jsr push16
+  dex               ; make space on user stack
+  dex
+  ldy #1
+  lda (RP),y        ; LSB of top value on return stack
+  sta stackbase+1,x ; add to user stack
+  iny
+  lda (RP),y        ; and then again for MSB
+  sta stackbase+2,x
   jmp next
 
 
 ;;; j copies immediately outer loop value (basically, third item down
 ;;; on the return stack)
 doj
-  sec
-  lda RP
-  sbc #6            ; 6 bytes = 3 spots down
-  sta SCRATCH
-  lda RP+1          ; return stack all on one page so
-  sta SCRATCH+1     ; no subtraction
-
-  lda (SCRATCH)
-  sta stackaccess
-  ldy #1
-  lda (SCRATCH),y
-  sta stackaccess+1
-
-  jsr push16
+  dex               ; make space on user stack
+  dex
+  ldy #5            ; get data from bytes 5 and 6 (third value down)
+  lda (RP),y        ; LSB of value on return stack
+  sta stackbase+1,x ; add to user stack
+  iny
+  lda (RP),y        ; and then again for MSB
+  sta stackbase+2,x
   jmp next
 
 
 ;;; k copies second outer loop value (basically, fifth item down
 ;;; on the return stack)
 dok
-  sec
-  lda RP
-  sbc #10           ; 10 bytes = 5 spots down
-  sta SCRATCH
-  lda RP+1          ; return stack always on same page
-  sta SCRATCH+1
-
-  lda (SCRATCH)
-  sta stackaccess
-  ldy #1
-  lda (SCRATCH),y
-  sta stackaccess+1
-
-  jsr push16
+  dex               ; make space on user stack
+  dex
+  ldy #9            ; get data from bytes 9 and 10 (fifth value down)
+  lda (RP),y        ; LSB of value on return stack
+  sta stackbase+1,x ; add to user stack
+  iny
+  lda (RP),y        ; and then again for MSB
+  sta stackbase+2,x
   jmp next
 
 
@@ -2861,22 +2847,16 @@ nocompile
 ;;; much of this will be shared with (LOOP), except that we start
 ;;; by pulling a value from the stack to do increment.
 doparplusloop
-  ;; grab the index from RP and stash it at SCRATCH
-  dec RP
-  lda (RP)
-  sta SCRATCH+1
-  dec RP
-  lda (RP)
-  sta SCRATCH
-
   jsr pop16         ; pull the increment value
-  clc               ; and add it to the value in SCRATCH
-  lda SCRATCH
+  ldy #1
+  clc               ; and add it to the value at top of r-stack
+  lda (RP),y
   adc stackaccess
-  sta SCRATCH
-  lda SCRATCH+1
+  sta (RP),y
+  iny
+  lda (RP),y
   adc stackaccess+1
-  sta SCRATCH+1
+  sta (RP),y
 
   jmp testandloop   ; jump to the code that we share with doparenloop
 
@@ -2884,37 +2864,38 @@ doparplusloop
 ;;; increment and test index and optionally branch back to address
 ;;; provided.
 doparenloop
-  ;; grab the index from RP and stash it at SCRATCH
-  dec RP
-  lda (RP)
-  sta SCRATCH+1
-  dec RP
-  lda (RP)
-  sta SCRATCH
-
-  ;; increment it
+  ;; increment the loop index in-place
 .(
-  inc SCRATCH
-  bne continue
-  inc SCRATCH+1
+  ldy #1
+  clc
+  lda (RP),y        ; no (),y mode for INC, sadly!
+  adc #1
+  sta (RP),y
+  bcc continue
+  iny
+  lda (RP),y
+  adc #0
+  sta (RP),y
 continue
 .)
 
 testandloop         ; also entry point for (+LOOP)
   ;; grab the loop limit and stash it in SCRATCH+2/3.
-  dec RP
-  lda (RP)
-  sta SCRATCH+3
-  dec RP
-  lda (RP)
+  ldy #3
+  lda (RP),y
   sta SCRATCH+2
+  iny
+  lda (RP),y
+  sta SCRATCH+3
 
   ;; compare index to the loop limit
 .(
+  ldy #1
   sec
-  lda SCRATCH       ; LSB, index
+  lda (RP),y        ; LSB, index
   sbc SCRATCH+2     ; compared to LSB, limit
-  lda SCRATCH+1
+  iny
+  lda (RP),y
   sbc SCRATCH+3
 ;  bvc hop
 ;  eor #$80          ; what is this FOR?
@@ -2923,17 +2904,6 @@ hop
 .)
 
 takeloop
-  ;; put index and limit back on return stack. (for limit, just inc
-  ;; RP, becuase it's still there on the stack.
-  inc RP
-  inc RP
-  lda SCRATCH
-  sta (RP)
-  inc RP
-  lda SCRATCH+1
-  sta (RP)
-  inc RP
-
   ;; grab the branch address and add it to IP
   lda (IP)          ; now load the offset and put it at SCRATCH+2
   sta SCRATCH+2
@@ -2952,8 +2922,12 @@ takeloop
   jmp next
 
 noloop
-  ;; we've already removed the values from the return stack
-  ;; we need to update IP to skip the branch address
+  ;; drop values from the return stack by adding 4 (4 bytes, 2 cells)
+  ;; to the RP. We assume RP is all on the same page and ignore MSB.
+  clc
+  lda RP
+  adc #4
+  sta RP
 .(
   clc
   lda IP
@@ -3048,9 +3022,9 @@ continue
 ;;; for LEAVE. It basically just does a branch, but first, it pops
 ;;; some values off the return stack.
 doparenleave
-  sec
+  clc
   lda RP
-  sbc #4
+  adc #4
   sta RP
   jmp dobranch
 
@@ -4786,8 +4760,9 @@ abort
   and #%11111110
   sta STATUS
 
-  stz RP            ; reset return stack
-  ldx #$ff          ; reset user stack
+  lda #$FF
+  sta RP            ; reset return stack
+  tax               ; reset user stack
   stz TCNT          ; reset text buffer
   stz TPTR
 
@@ -4856,23 +4831,22 @@ done
 ;;;
 
 rpush
-  lda stackaccess
-  sta (RP)
-  inc RP
   lda stackaccess+1
   sta (RP)
-  inc RP            ; BUG presumes that RP doesn't roll over page boundary
+  dec RP
+  lda stackaccess
+  sta (RP)
+  dec RP            ; BUG presumes that RP doesn't roll over page boundary
   rts
 
 
 rpull
-  dec RP
-  dec RP
-  ldy #1
-  lda (RP),y
-  sta stackaccess+1
+  inc RP
   lda (RP)
   sta stackaccess
+  inc RP
+  lda (RP)
+  sta stackaccess+1
   rts
 
 
