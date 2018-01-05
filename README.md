@@ -13,7 +13,8 @@ The old one was somewhat arbitrary, keeping to the rough parameters
 of the book I'd read on FORTH but not following any particular
 conventions about implementation. This one hews closer to the
 standard models for the interfunctioning of interpreter and compiler,
-the operation of IMMEDIATE words, and so on.
+the operation of IMMEDIATE words, and so on. Where in doubt, it follows
+ANS Forth although I'm being far from religious about it.
 
 FORTH was an abbreviation of "fourth", limited by the conventions
 of the filesystem on which it was written. "SECND" is an abbreviation
@@ -25,8 +26,13 @@ and just a few words.
 v02 has a more fleshed out vocabulary, variables, and R-stack
 manipulations.
 
-v03 will include the initial compiler, plus strings, looping, and
+v03 includes the initial compiler, plus strings, looping, and
 conditionals.
+
+v05 has recursion, double-length arithmetic, and signed arithmetic.
+
+v06 is mainly focused on clean-up, efficiencies, bug fixes, and
+migrating internal operations towards usual Forth models.
 
 Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of

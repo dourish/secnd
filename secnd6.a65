@@ -984,7 +984,6 @@ d101link
 d101code
   .word doimmed
 
-dtop
 d102entry
   .byte 7
   .byte "dnegate"
@@ -992,6 +991,41 @@ d102link
   .word d101entry
 d102code
   .word donegate32
+
+d103entry
+  .byte 4
+  .byte "fill"
+d103link
+  .word d102entry
+d103code
+  .word dofill
+
+d104entry
+  .byte 1
+  .byte "0"
+d104link
+  .word d103entry
+d104code
+  .word doloadconst
+d104param
+  .word $0000
+
+d105entry
+  .byte 2
+  .byte "u."
+d105link
+  .word d104entry
+d105code
+  .word douprint
+
+dtop
+d106entry
+  .byte 2
+  .byte ".r"
+d106link
+  .word d105entry
+d106code
+  .word dorprint
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1196,7 +1230,16 @@ dodivmod
   jmp next
 
 doprint
-  jsr print16sign
+  jsr print16s
+  jmp next
+
+douprint
+  jsr print16u
+  jmp next
+
+dorprint
+  jsr swap16        ; pull number to be printed to the top
+  jsr rprint16s
   jmp next
 
 docr
@@ -1501,26 +1544,23 @@ dovaddr
 ;;; As above, but for constants, so we don't load the address,
 ;;; but the value.
 doloadconst
-  lda XT
+  clc               ; load the XT for this word and add two
+  lda XT            ; to point to the parameter space. store
+  adc #2            ; the address in SCRATCH
   sta SCRATCH
   lda XT+1
+  adc #0
   sta SCRATCH+1
-.(
-  clc
-  lda SCRATCH       ; add two bytes (one cell) to find param area
-  adc #2
-  sta SCRATCH
-  bcc continue
-  inc SCRATCH+1
-continue
-.)
-  lda (SCRATCH)
-  sta stackaccess
+
+  dex               ; make space on the stack
+  dex               ; for efficiency, we unroll the push
+  lda (SCRATCH)     ; and do it directly
+  sta stackbase+1,x
   ldy #1
   lda (SCRATCH),y
-  sta stackaccess+1
-  jsr push16        ; push the address
+  sta stackbase+2,x
   jmp next
+
 
 ;;; dofetch is the code for "@". Pull an address off the stack and
 ;;; look up the 16-bit data stored at that address
@@ -1774,6 +1814,8 @@ done
 
 ;;; rcopy (for the Forth word "R") -- copy top of R stack onto data stack
 ;;; this code also implements I (since it's the same thing).
+;;; BUG there has to be a more efficient way to do this. if the R-stack
+;;; grew downwards, that would be easier... it would help LOOP too.
 dorcopy
   dec RP
   lda (RP)
@@ -2286,17 +2328,17 @@ skipmsb
 ;;; like 0branch if the top stack value is 0; in fact, 0branch calls
 ;;; this code in that case
 dobranch
-  lda (IP)          ; now load the offset and put it at SCRATCH+2
-  sta SCRATCH+2
   ldy #1  
-  lda (IP),y
-  sta SCRATCH+3
+  lda (IP),y        ; load offset and cache it on the stack
+  pha               ; do MSB first because we want to pull
+  lda (IP)          ; LSB first
+  pha
 
-  clc               ; now add the offset to the IP
-  lda SCRATCH+2
+  clc               ; now add the cached offset to the IP
+  pla
   adc IP
   sta IP
-  lda SCRATCH+3
+  pla
   adc IP+1
   sta IP+1
 
@@ -3547,7 +3589,7 @@ loop
   sta stackbase+1,x ; into new top-of-stack position
   lda stackbase+2,y
   sta stackbase+2,x
-  jsr print16sign   ; that will also pop the copy from the stack
+  jsr print16s      ; that will also pop the copy from the stack
   bra loop
 done
 .)
@@ -3615,6 +3657,50 @@ doimmed
   ora #IMM
   sta (DT)
   jmp next          ; shortest instruction yet?
+
+
+;;; dofill implements FILL.
+dofill
+  lda stackbase+5,x ; copy base address into stackaccess
+  sta stackaccess
+  lda stackbase+6,x
+  sta stackaccess+1
+
+.(
+outerloop
+  lda stackbase+4,x ; MSB of count
+  beq lessthanpage  ; if zero, there's less than a page to copy
+
+  lda stackbase+1,x ; the value to copy in
+  ldy #$ff
+innerloop
+  sta (stackaccess),y
+  dey
+  bne innerloop
+  sta (stackaccess),y
+  inc stackaccess+1 ; add one to MSB of our base
+  dec stackbase+4,x ; count off one page
+  bne outerloop     ; until MSB of count is zero
+.)
+
+lessthanpage
+.(
+  lda stackbase+1,x ; we might be coming from before we loaded this
+  ldy stackbase+3,x ; remaining count
+  beq done
+finalloop
+  dey
+  sta (stackaccess),y
+  cpy #0
+  bne finalloop
+done
+.)
+  clc               ; pop three cells off the stack
+  txa
+  adc #6
+  tax
+  jmp next
+
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
@@ -4960,53 +5046,139 @@ finish
   rts
 
 
-;;; Print a 16-bit number, bearing in mind that it might be negative.
-;;;
-print16sign
-  ;; create myself three bytes of storage on the stack
+;;; Print a 16-bit number, interpreted as signed, right-aligned in
+;;; a field that is as wide as specified on the stack.
+rprint16s
+  ;; Initialize the PADPTR. We will assemble the string on the
+  ;; pad. Leave one space for a count.
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+
 .(
-  dex
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+2,x
+  bit #%10000000
+  beq nominus
+
+  lda #$2d          ; minus sign
+  sta (PADPTR)      ; add it to the string we're assembling
+  inc PADPTR
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+nominus
+.)
+  jsr assemble16    ; assemble a 16-bit number on the pad
+  jsr pop16         ; pull the field width (presume < 256)
+  phy
+  sec
+  lda stackaccess   ; load field width
+  sbc PAD           ; subtract the the string length
+  bmi printnum      ; skip spaces if number longer than field
+  tay
+  lda #$20
+  cpy #0
+  beq printnum
+space
+  jsr puta
+  dey
+  bne space
+printnum
+  jsr prpadnum
+  ply               ; restore Y
+  rts
+
+;;; Print a 16-bit number, bearing in mind that it might be negative.
+;;; After the initial test for sign, this shares code with the
+;;; unsigned print routine and with the right-aligned printing.
+;;;
+print16s
+  ;; Initialize the PADPTR. We will assemble the string on the
+  ;; pad. Leave one space for a count.
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+
+.(
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+2,x
+  bit #%10000000
+  beq nominus
+
+  lda #$2d          ; minus sign
+  sta (PADPTR)      ; add it to the string we're assembling
+  inc PADPTR
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+nominus
+.)
+  jsr assemble16    ; assemble a 16-bit number on the pad
+  lda #$20
+  jsr puta
+  jsr prpadnum      ; print it
+  rts
+
+
+;;; Print a 16-bit quantity interpreted as an unsigned number.
+;;; Most of the code here is shared with the signed printing
+;;; routine too.
+print16u
+  ;; Initialize the PADPTR. We will assemble the string on the
+  ;; pad. Leave one space for a count.
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+
+  ; jmp pr16       ; commented out because we can just fall through
+  jsr assemble16    ; assemble a 16-bit number on the pad
+  lda #$20
+  jsr puta
+  jsr prpadnum      ; print it
+  rts
+
+
+;;; print16 is shared by both the signed and unsigned printing
+;;; routine. By the time we get here, we should already have
+;;; printed a space and potentially a minus sign.
+assemble16
+  dex               ; make working space on the stack
   dex
   dex
   
   ;; that leaves the data to be read at stackbase+4,x and stackbase+5,x
   
-  stz stackbase+1,x ; dec0
-  stz stackbase+2,x ; dec1
-  stz stackbase+3,x ; dec2
+  stz stackbase+1,x ; These are the bytes in which we'll assemble
+  stz stackbase+2,x ; up to five BCD digits. Initialize them to
+  stz stackbase+3,x ; zero.
 
-  ;; always print a space
-  lda #$20
-  jsr puta
-
-  ;; next, check the most significant bit of the number
-  ;; to see if it's negative
-  lda stackbase+5,x
-  bit #%10000000
-  beq nominus
-
-  lda #$2d          ; minus sign
-  jsr puta
-
-  ;; now calculate the two's complement of the number we have.
-  ;; flip all the bits and add one.
-  lda stackbase+4,x
-  eor #$ff
-  sta stackbase+4,x
-  lda stackbase+5,x
-  eor #$ff
-  sta stackbase+5,x
-  clc
-  lda stackbase+4,x
-  adc #1
-  sta stackbase+4,x
-  lda stackbase+5,x
-  adc #0
-  sta stackbase+5,x
-
-  ;; continue with printing
-
-nominus
   phy               ; preserve Y
   lda #0
   sed
@@ -5044,8 +5216,7 @@ loop
   ldy #3
 
 .(
-nextdec             ; go through this loop for each BCD digit
-
+nextbcd             ; go through this loop for each BCD digit
   ;; first, upper four bits
   lda (SCRATCH+2),y
   and #%11110000
@@ -5060,7 +5231,9 @@ prupper
   ror
   clc
   adc #'0
-  jsr puta          ; print the digit
+;  jsr puta          ; print the digit
+  sta (PADPTR)
+  inc PADPTR
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
@@ -5073,27 +5246,57 @@ lower
 prlower
   clc
   adc #'0
-  jsr puta          ; print the digit
+;  jsr puta          ; print the digit
+  sta (PADPTR)
+  inc PADPTR
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
 skip
   dey
-  bne nextdec
+  bne nextbcd
 .)
 
+.(
   lda SCRATCH      ; did we not print anything?
-  bne cleanup
+  bne finalize
   lda #$30         ; print a zero
-  jsr puta
+  ;jsr puta
+  sta (PADPTR)
+  inc PADPTR
 
+finalize
+  sec               ; finalize the string count
+  lda PADPTR
+  sbc #<PAD
+  dec               ; remove one
+  sta PAD           ; that's the count
+  ply               ; restore y
+
+  txa               ; clear five bytes off the stack (three for
+  clc               ; working space and two for the parameter)
+  adc #5
+  tax
+.)
+  rts
+
+;; print the counted string on the pad and clean up the stack after print
+prpadnum
+.(
+  phy               ; preserve Y
+
+  ldy #1
+printnext
+  lda PAD,y
+  jsr puta
+  cpy PAD
+  beq cleanup
+  iny
+  bra printnext
+  
 cleanup
   ;; clean up -- reclaim our temporary space and also pop item from stack
   ply              ; restore Y
-  txa              ; clearing five bytes off the stack
-  clc              ; (three for working space and two for the value)
-  adc #5
-  tax
 .)
   rts
 
