@@ -84,6 +84,7 @@ PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
 USERBASE=$2000      ; staring address for user code
+XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -1082,7 +1083,6 @@ d112link
 d112code
   .word dorprint32
 
-dtop
 d113entry
   .byte 5
   .byte "abort"
@@ -1090,6 +1090,15 @@ d113link
   .word d112entry
 d113code
   .word abort
+
+dtop
+d114entry
+  .byte 6
+  .byte "upload"
+d114link
+  .word d113entry
+d114code
+  .word doupload
 
 
 ;d101entry
@@ -1531,7 +1540,7 @@ doover
   jmp next
 
 ;;; Implements ROT. We do everything inline here rather than using
-;;; push and poop.
+;;; push and pop.
 dorot
   dex               ; make some new space on the stack temporarily
   dex
@@ -3762,6 +3771,11 @@ done
   jmp next
 
 
+;;; Call into the xmodem upload code from the monitor
+doupload
+  jsr crlf
+  jsr XRECV
+  jmp next
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
