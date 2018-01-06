@@ -9,8 +9,9 @@
 ;;; standards, albeit outdated ones; the starting point for this
 ;;; is FigFORTH although it may get ANSIfied along the way.
 ;;;
-;;; I'm building this for my single-board 6502 computer, the Mite.
-;;; For now at least, this is written to be loaded in RAM.
+;;; I'm building this for my single-board 65C02 computer, the Mite.
+;;; It can run in ROM or RAM; for now, the memory map is built
+;;; for a RAM-resident configuration.
 ;;;
 ;;; Paul Dourish, December 2017
 ;;;
@@ -60,6 +61,7 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; DPTR is an internal variable for traversing the dictionary
 ;;; STATUS is the system status flags (e.g. compilation flag)
 ;;; CWORD holds a pointer to the word currently being compiled
+;;; SOURCE indicates where input is coming from
 ;;; INPUT points to the input buffer
 ;;; WORD points to the temporary string processing space
 ;;; 
@@ -76,6 +78,7 @@ DP=$005E            ; and 005F
 STATUS=$0060        ; status word
 CWORD=$0061         ; and 0062
 PADPTR=$0063        ; and 0064
+SOURCE=$0065
 RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
@@ -120,6 +123,7 @@ coldstart
   stz IP+1
 
   stz STATUS        ; turn off compilation
+  stz SOURCE        ; input from terminal
 
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing downwards, until I have a better idea; I should probably
@@ -218,7 +222,7 @@ d6entry
 d6link
   .word d5entry
 d6code
-  .word doprint
+  .word doprint16
 
 d7entry
   .byte 2
@@ -842,7 +846,7 @@ d83entry
 d83link
   .word d82entry
 d83code
-  .word prdec32
+  .word doprint32
 
 d84entry
   .byte 5
@@ -1020,16 +1024,73 @@ d105entry
 d105link
   .word d104entry
 d105code
-  .word douprint
+  .word douprint16
 
-dtop
 d106entry
   .byte 2
   .byte ".r"
 d106link
   .word d105entry
 d106code
-  .word dorprint
+  .word dorprint16
+
+d107entry
+  .byte 3
+  .byte "d0<"
+d107link
+  .word d106entry
+d107code
+  .word dolesszero32
+
+d108entry
+  .byte 4
+  .byte "dabs"
+d108link
+  .word d107entry
+d108code
+  .word doabs32
+
+d109entry
+  .byte 2
+  .byte "d<"
+d109link
+  .word d108entry
+d109code
+  .word doless32
+
+d110entry
+  .byte 4
+  .byte "dmax"
+d110link
+  .word d109entry
+d110code
+  .word dodmax
+
+d111entry
+  .byte 4
+  .byte "dmin"
+d111link
+  .word d110entry
+d111code
+  .word dodmin
+
+d112entry
+  .byte 3
+  .byte "d.r"
+d112link
+  .word d111entry
+d112code
+  .word dorprint32
+
+dtop
+d113entry
+  .byte 5
+  .byte "abort"
+d113link
+  .word d112entry
+d113code
+  .word abort
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1230,17 +1291,43 @@ dodivmod
   inx
   jmp next
 
-doprint
+doprint16
   jsr print16s
   jmp next
 
-douprint
+douprint16
   jsr print16u
   jmp next
 
-dorprint
+dorprint16
   jsr swap16        ; pull number to be printed to the top
   jsr rprint16s
+  jmp next
+
+doprint32
+  jsr print32s
+  jmp next
+
+dorprint32
+  ;; top cell is the field width. next two cells down are the
+  ;; double-length number. Do a custom rotation.
+  lda stackbase+2,x ; push top cell onto hardware stack, MSB first
+  pha
+  lda stackbase+1,x
+  pha
+  lda stackbase+3,x ; move double-word from +3 through +6 to
+  sta stackbase+1,x ; +1 through +4
+  lda stackbase+4,x
+  sta stackbase+2,x
+  lda stackbase+5,x
+  sta stackbase+3,x
+  lda stackbase+6,x
+  sta stackbase+4,x
+  pla               ; restore field width from hardware stack
+  sta stackbase+5,x ; but tuck it under the double word
+  pla
+  sta stackbase+6,x
+  jsr rprint32s
   jmp next
 
 docr
@@ -1566,24 +1653,29 @@ doloadconst
 ;;; dofetch is the code for "@". Pull an address off the stack and
 ;;; look up the 16-bit data stored at that address
 dofetch
-  jsr pop16         ; pop value into stackaccess
-  dex               ; make space on the stack
-  dex
+  lda stackbase+1,x ; don't actually pop the address, just grab it
+  sta stackaccess
+  lda stackbase+2,x
+  sta stackaccess+1
   ldy #1
   lda (stackaccess)  ; load MSB and store on stack
-  sta stackbase+1,x    ; store in the new space on the stack
+  sta stackbase+1,x  ; store back on the stack
   lda (stackaccess),y  ; then LSB
   sta stackbase+2,x
   jmp next
 
 ;;; docfetch implements c@ -- same as dofetch but loads just one byte
 docfetch
+  lda stackbase+1,x ; don't actually pop the address, just grab it
+  sta stackaccess
+  lda stackbase+2,x
+  sta stackaccess+1
+  lda (stackaccess) ; grab single byte at the address
+  sta stackbase+1,x ; and store in LSB
   jsr pop16         ; pop address into stackaccess
   dex               ; make space on the stack
   dex
   stz stackbase+2,x ; set MSB to zero
-  lda (stackaccess) ; grab single byte at the address
-  sta stackbase+1,x ; and store in LSB
   jmp next
 
 
@@ -3676,6 +3768,7 @@ done
   jmp next
 
 
+
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
 ;;;
@@ -3824,7 +3917,6 @@ notequal
 .)
 
 
-
 ;;; compare a 32-bit number to zero
 dozero32
 .(
@@ -3842,6 +3934,105 @@ zero
   inx
   jmp settrue
 .)
+
+;;; implements D0<
+dolesszero32
+.(
+  lda stackbase+4,x
+  bit #%1000000
+  bne yes
+  inx
+  inx
+  jmp setfalse
+yes
+  inx
+  inx
+  jmp settrue
+.)
+
+;;; implements DABS
+doabs32
+.(
+  lda stackbase+4,x
+  bit #%1000000
+  beq done
+  jmp donegate32
+done
+  jmp next
+.)
+
+;;; implements D<
+doless32
+.(
+  sec
+  lda stackbase+5,x
+  sbc stackbase+1,x
+  lda stackbase+6,x
+  sbc stackbase+2,x
+  lda stackbase+7,x
+  sbc stackbase+3,x
+  lda stackbase+8,x
+  sbc stackbase+4,x
+  bpl no
+  clc
+  txa
+  adc #6
+  tax
+  jmp settrue
+no
+  txa
+  adc #6
+  tax
+  jmp setfalse
+.)
+
+;;; implements DMIN
+dodmin
+.(
+  sec
+  lda stackbase+5,x
+  sbc stackbase+1,x
+  lda stackbase+6,x
+  sbc stackbase+2,x
+  lda stackbase+7,x
+  sbc stackbase+3,x
+  lda stackbase+8,x
+  sbc stackbase+4,x
+  bpl no
+yes
+  clc               ; min value is lower on stack, so drop
+  txa               ; the upper one
+  adc #4
+  tax
+  jmp next
+no
+  jsr swap32
+  bra yes
+.)
+
+;;; implements DMAX
+dodmax
+.(
+  sec
+  lda stackbase+5,x
+  sbc stackbase+1,x
+  lda stackbase+6,x
+  sbc stackbase+2,x
+  lda stackbase+7,x
+  sbc stackbase+3,x
+  lda stackbase+8,x
+  sbc stackbase+4,x
+  bpl no
+yes
+  jsr swap32        ; swap and proceed with "no"
+no
+  clc               ; min value is lower on stack, so drop
+  txa               ; the upper one
+  adc #4
+  tax
+  jmp next
+.)
+
 
 
 ;;; domultmix -- multiply two 16-bit numbers, giving a 32-bit result
@@ -4079,13 +4270,130 @@ dostardiv
   jmp next
 
 
+;;; BUG there is an awful lot of code shared between rprint32
+;;; and print32. Can all the setup stuff be broken out?
+rprint32s
+  ;; Initialize the PADPTR. We will assemble the string on the
+  ;; pad. Leave one space for a count.
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+
+.(
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+4,x
+  bit #%10000000
+  beq nominus
+
+  lda #$2d          ; minus sign
+  sta (PADPTR)      ; add it to the string we're assembling
+  inc PADPTR
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  eor #$ff
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  adc #0
+  sta stackbase+4,x
+
+nominus
+.)
+  jsr assemble32    ; assemble the 32-bit number on the pad
+  jsr pop16         ; pull the field width (presume < 256)
+  phy
+  sec
+.(
+  lda stackaccess   ; load field width
+  sbc PAD           ; subtract the the string length
+  bmi printnum      ; skip spaces if number longer than field
+  tay
+  lda #$20
+  cpy #0
+  beq printnum
+space
+  jsr puta
+  dey
+  bne space
+printnum
+.)
+  jsr prpadnum
+  ply               ; restore Y
+  rts
+
+
+
 ;;; Print a 32-bit decimal number. This is kinda awful. The technique
 ;;; I used for 16-bits was messy enough, but this is messier now that
 ;;; I've extended it. (Updated to handle negative numbers.)
-prdec32
+print32s
+  ;; Initialize the PADPTR. We will assemble the string on the
+  ;; pad. Leave one space for a count.
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+
 .(
-  ;; create myself five bytes of storage on the stack. these will
-  ;; become ten nybbles each holding a single binary-coded decimal
+  ;; next, check the most significant bit of the number
+  ;; to see if it's negative
+  lda stackbase+4,x
+  bit #%10000000
+  beq nominus
+
+  lda #$2d          ; minus sign
+  sta (PADPTR)      ; add it to the string we're assembling
+  inc PADPTR
+
+  ;; now calculate the two's complement of the number we have.
+  ;; flip all the bits and add one.
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  eor #$ff
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  adc #0
+  sta stackbase+4,x
+
+nominus
+  jsr assemble32
+  lda #$20
+  jsr puta
+  jsr prpadnum
+.)
+  rts
+
+
+
+assemble32
+  ;; Open five bytes of storage on the stack. These will be
+  ;; ten nybbles each holding a single binary-coded decimal
   ;; digit (since 32 bytes stores a max of a ten-digit decimal).
   dex
   dex
@@ -4094,7 +4402,7 @@ prdec32
   dex
   
   ;; that leaves the data to be read at stackbase+6,x through
-  ;;  stackbase+9,x
+  ;; stackbase+9,x
   
   stz stackbase+1,x ; dec0
   stz stackbase+2,x ; dec1
@@ -4102,52 +4410,7 @@ prdec32
   stz stackbase+4,x ; dec3
   stz stackbase+5,x ; dec4
 
-  ;; always print a space
-  lda #$20
-  jsr puta
-
-  ;; next, check the most significant bit of the number
-  ;; to see if it's negative
-  lda stackbase+9,x
-  bit #%10000000
-  beq nominus
-
-  ;; it's negative, so print the minus and calculate two's complement
-  lda #$2d          ; minus sign
-  jsr puta
-
-  ;; now calculate the two's complement of the number we have.
-  ;; flip all the bits and add one.
-  lda stackbase+6,x
-  eor #$ff
-  sta stackbase+6,x
-  lda stackbase+7,x
-  eor #$ff
-  sta stackbase+7,x
-  lda stackbase+8,x
-  eor #$ff
-  sta stackbase+8,x
-  lda stackbase+9,x
-  eor #$ff
-  sta stackbase+9,x
-  clc
-  lda stackbase+6,x
-  adc #1
-  sta stackbase+6,x
-  lda stackbase+7,x
-  adc #0
-  sta stackbase+7,x
-  lda stackbase+8,x
-  adc #0
-  sta stackbase+8,x
-  lda stackbase+9,x
-  adc #0
-  sta stackbase+9,x
-
-  ;; continue with printing
-
-nominus
-  phy               ; preserve Y (why?)
+  phy               ; preserve Y
   lda #0
   sed
   ldy #32           ; count of bits we are processing
@@ -4177,9 +4440,9 @@ loop
   bne loop
 .)
   cld
-  ;; we have the result in the temporary storage, as BCD. now print that as
-  ;; a ten-character string. do this as five loops of an upper and
-  ;; lower nybble.
+  ;; we have the result in the temporary storage, as BCD. now print
+  ;; that as a ten-character string. do this as five loops of
+  ;; an upper and lower nybble.
 
   ;; set a flag to determine whether we've printed anything non-zero
   stz SCRATCH
@@ -4192,7 +4455,7 @@ loop
   ldy #5
 
 .(
-nextdec             ; go through this loop for each BCD digit
+nextbcd             ; go through this loop for each BCD digit
   ;; first, upper four bytes
   lda (SCRATCH+2),y
   and #%11110000
@@ -4207,7 +4470,9 @@ prupper
   ror
   clc
   adc #'0
-  jsr puta
+;  jsr puta
+  sta (PADPTR)
+  inc PADPTR
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
@@ -4221,29 +4486,41 @@ lower
 prlower
   clc
   adc #'0
-  jsr puta
+;  jsr puta
+  sta (PADPTR)
+  inc PADPTR
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
 skip
   dey
-  bne nextdec
+  bne nextbcd
 .)
 
+.(
   ;; check -- if we never printed anything, output a zero
   lda SCRATCH
-  bne cleanup
-  lda #'0
-  jsr puta
+  bne finalize
+  lda #$30          ; add a zero
+  ;jsr puta
+  sta (PADPTR)
+  inc PADPTR
 
-cleanup
-  clc               ; nine bytes off the stack (five for working
-  txa               ; space and four for the 32-bit number).
+finalize
+  sec
+  lda PADPTR        ; calculate string length
+  sbc #<PAD
+  dec
+  sta PAD           ; update string count
+  ply               ; restore Y
+
+  clc               ; clear bytes off the stack (five for
+  txa               ; working space and four for 32-bit number).
   adc #9
   tax
-  ply               ; restore Y (why?)
 .)
-  jmp next
+  rts
+
 
 
 ;;;
@@ -4288,6 +4565,12 @@ do2over
   jmp next
 
 do2swap
+  jsr swap32
+  jmp next
+
+;;; this routine is broken out because we use it in some other
+;;; places too
+swap32
   dex               ; make some temporary space
   dex
   dex
@@ -4324,7 +4607,7 @@ do2swap
   inx
   inx
 
-  jmp next
+  rts
 
 
 
@@ -4576,7 +4859,7 @@ wait_txd_empty3
 
 
 ;;; dictmatch looks up a word in the dictionary. The word being
-;;; matched is indicated by WORD< which holds a pointer to a
+;;; matched is indicated by WORD, which holds a pointer to a
 ;;; counted string. On exist, DPTR either points to the entry
 ;;; for the word, or 0000 in case of no match.
 dictmatch
@@ -4765,6 +5048,7 @@ abort
   tax               ; reset user stack
   stz TCNT          ; reset text buffer
   stz TPTR
+  stz SOURCE        ; return control to terminal
 
   jsr crlf          ; print newline
   jmp interploop    ; back to interpreter main loop
@@ -5059,6 +5343,7 @@ nominus
   jsr pop16         ; pull the field width (presume < 256)
   phy
   sec
+.(
   lda stackaccess   ; load field width
   sbc PAD           ; subtract the the string length
   bmi printnum      ; skip spaces if number longer than field
@@ -5071,6 +5356,7 @@ space
   dey
   bne space
 printnum
+.)
   jsr prpadnum
   ply               ; restore Y
   rts
