@@ -1632,22 +1632,16 @@ dovaddr
 ;;; As above, but for constants, so we don't load the address,
 ;;; but the value.
 doloadconst
-  clc               ; load the XT for this word and add two
-  lda XT            ; to point to the parameter space. store
-  adc #2            ; the address in SCRATCH
-  sta SCRATCH
-  lda XT+1
-  adc #0
-  sta SCRATCH+1
-
-  dex               ; make space on the stack
-  dex               ; for efficiency, we unroll the push
-  lda (SCRATCH)     ; and do it directly
-  sta stackbase+1,x
-  ldy #1
-  lda (SCRATCH),y
+  dex               ; make some space on the stack
+  dex
+  ldy #2            ; looking at (XT)+2 (param space)
+  lda (XT),y        ; load LSB
+  sta stackbase+1,x ; straight onto the stack
+  iny
+  lda (XT),y        ; MSB
   sta stackbase+2,x
-  jmp next
+  jmp next          ; done
+  
 
 
 ;;; dofetch is the code for "@". Pull an address off the stack and
@@ -2794,20 +2788,23 @@ nocompiledo
 ;;; doparendo is the implementation of (DO), the run-time behavior for
 ;;; DO. It pulls two values off the data stack (the loop limit and the
 ;;; loop index) and places them on the return stack (in inverted order).
-;;; BUG i could unroll this and it would be much more efficient.
 doparendo
-  jsr pop16         ; pop loop index
-  lda stackaccess   ; stash it for a moment
-  sta SCRATCH
-  lda stackaccess+1
-  sta SCRATCH+1
-  jsr pop16         ; pop loop limit
-  jsr rpush         ; push it onto the return stack
-  lda SCRATCH       ; retreive the caches loop index
-  sta stackaccess
-  lda SCRATCH+1
-  sta stackaccess+1
-  jsr rpush         ; push it
+  lda stackbase+4,x ; MSB of limit
+  sta (RP)
+  dec RP
+  lda stackbase+3,x ; LSB of limit
+  sta (RP)
+  dec RP
+  lda stackbase+2,x ; MSB of index
+  sta (RP)
+  dec RP
+  lda stackbase+1,x ; LSB of index
+  sta (RP)
+  dec RP
+  clc               ; pop two cells (four types) off stack
+  txa
+  adc #4
+  tax
   jmp next          ; done  
 
 
@@ -2996,20 +2993,17 @@ hop
 .)
 
 takeloop
-  ;; grab the branch address and add it to IP
-  lda (IP)          ; now load the offset and put it at SCRATCH+2
-  sta SCRATCH+2
-  ldy #1  
-  lda (IP),y
-  sta SCRATCH+3
-
-  clc               ; now add the offset to the IP
-  lda SCRATCH+2
-  adc IP
-  sta IP
-  lda SCRATCH+3
-  adc IP+1
-  sta IP+1
+  ;; grab the branch address from (IP) and add it to IP
+  ldy #1
+  lda (IP),y        ; load MSB
+  pha               ; stash it
+  clc
+  lda (IP)          ; load LSB
+  adc IP            ; add
+  sta IP            ; update
+  pla               ; recover stashed MSB
+  adc IP+1          ; add
+  sta IP+1          ; update
 
   jmp next
 
@@ -3166,11 +3160,11 @@ nextchar
   tay               ; store in Y, and add one...
   iny               ; for the pointer to the next entry
   lda (DPTR),y      ; update DPTR to point to next entry
-  sta SCRATCH
+  pha
   iny
   lda (DPTR),y  
   sta DPTR+1
-  lda SCRATCH
+  pla
   sta DPTR
   bra nextentry
 
@@ -5462,13 +5456,11 @@ loop
 
   ;; we have the result in the temporary storage, as BCD. now print that as
   ;; a five-character string (since max is 65535).
-  ;; could do this using y as an index and looping.. rather than unrolling
-  ;; as here
 
-  ;; set a flag to determine whether we've printed anything non-zero
+  ;; first set a flag to signal whether we've printed anything non-zero
   stz SCRATCH
 
-  txa
+  txa               ; calculate base address we'll be using
   adc #<stackbase
   sta SCRATCH+2
   lda #>stackbase
