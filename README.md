@@ -16,9 +16,10 @@ standard models for the interfunctioning of interpreter and compiler,
 the operation of IMMEDIATE words, and so on. Where in doubt, it follows
 ANS Forth although I'm being far from religious about it.
 
-FORTH was an abbreviation of "fourth", limited by the conventions
-of the filesystem on which it was written. "SECND" is an abbreviation
-of "second" as an homage.
+Chuck Moore's FORTH was an abbreviation of "fourth", limited by
+the conventions of the filesystem on which it was written. This being
+my second Forth implementation, "SECND" is an abbreviation of
+"second" as an homage.
 
 v01 is a very first, minimal implementation with a text interpreter
 and just a few words.
@@ -38,3 +39,7 @@ Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of
 the work of cleaning and clarifying that would be involved in
 making it available for others to use.
+
+SECND was developed using the xa cross-assembler, so that's the
+syntax being used here.
+

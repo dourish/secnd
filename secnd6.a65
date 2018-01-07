@@ -61,9 +61,10 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; DPTR is an internal variable for traversing the dictionary
 ;;; STATUS is the system status flags (e.g. compilation flag)
 ;;; CWORD holds a pointer to the word currently being compiled
-;;; SOURCE indicates where input is coming from
+;;; SOURCE indicates where input is coming from (0 for terminal)
 ;;; INPUT points to the input buffer
 ;;; WORD points to the temporary string processing space
+;;; INBUFF points to the current non-terminal input area
 ;;; 
 ;;;
 IP=$0050            ; and 0051
@@ -79,6 +80,7 @@ STATUS=$0060        ; status word
 CWORD=$0061         ; and 0062
 PADPTR=$0063        ; and 0064
 SOURCE=$0065
+INBUFF=$0066        ; and 0067
 RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
@@ -1091,7 +1093,6 @@ d113link
 d113code
   .word abort
 
-dtop
 d114entry
   .byte 6
   .byte "upload"
@@ -1100,6 +1101,14 @@ d114link
 d114code
   .word doupload
 
+dtop
+d115entry
+  .byte 4
+  .byte "load"
+d115link
+  .word d114entry
+d115code
+  .word doload
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -3777,6 +3786,21 @@ doupload
   jsr XRECV
   jmp next
 
+
+;;; Temporarily switch input to tbe buffer location specified on
+;;; the stack.
+doload
+  jsr pop16         ; load address from the stack and set it
+  lda stackaccess   ; as the memory region from which to read
+  sta INBUFF        ; input text.
+  lda stackaccess+1
+  sta INBUFF+1
+  stz TCNT          ; flush pending input
+  stz TPTR
+  inc SOURCE        ; 0 is terminal, non-zero is memory
+  jmp next
+
+
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
 ;;;
@@ -4961,6 +4985,12 @@ nextchar
 
   ;; no more input -- we have exhausted the text buffer. refill.
 nomoreinput
+.(
+  lda SOURCE        ; where are we reading from?
+  beq terminal      ; terminal
+  jsr readbufline   ; buffer
+  bra finishedread
+terminal
   ;; are we compiling?
   lda STATUS
   beq usualprompt   ; not compiling so say "OK" as usual
@@ -4969,9 +4999,11 @@ nomoreinput
 usualprompt
   jsr okcrlf        ; signal completion
 refill
-  jsr readline      ; read another line of text
+  jsr readtermline  ; read another line of text
+finishedread
   stz TPTR          ; reset the pointer
   bra readnext      ; loop around
+.)
 
   ;; we have detected the start of a non-space sequence. read a word
   ;; into a counted string at WORD.
@@ -5002,10 +5034,9 @@ doneword
 
 
 
-
-;;; Read a new line into the INPUT buffer
-;;;
-readline
+;;; Read a new line into the INPUT buffer. This reads from the
+;;; terminal; readbufline will read from a buffer.
+readtermline
   ldy #0
   stz TCNT          ; reset the counter
 readchar
@@ -5040,6 +5071,46 @@ doneline
   sta INPUT,y       ; add a null terminator
   sty TCNT          ; update character count
   rts
+
+
+;;; Read a new line into the INPUT buffer, taking our input from
+;;; an area of memory. This is a bit of a hack, but allows other
+;;; code to process the input buffer with no knowledge of where
+;;; the text comes from. When the buffer is exhausted (signaled
+;;; by reading either a nul or the XMODEM buffer data, switch
+;;; back to terminal input.
+readbufline
+  ldy #0
+  stz TCNT
+readloop
+  lda (INBUFF),y
+  beq endofbuffer   ; null indicates end of the buffer
+  cmp #$1A          ; XMODEM padding character too
+  beq endofbuffer
+  cmp #$0A
+  beq endofline
+  cmp #$0D
+  beq endofline
+  sta INPUT,y
+  iny
+  bra readloop
+endofbuffer
+  stz SOURCE        ; set SOURCE back to 0 (ie, read from terminal)
+  ; continue to end of line
+endofline
+  lda #0
+  sta INPUT,y
+  sty TCNT
+  iny               ; move past the end of line character
+  tya               ; and update the buffer pointer
+  clc
+  adc INBUFF
+  sta INBUFF
+  lda INBUFF+1
+  adc #0
+  sta INBUFF+1
+  rts  
+
 
 
 ;;; Implements ABORT. On error, resets and returns to interpreter.
