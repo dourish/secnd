@@ -3,3 +3,15 @@
 : clear 74 50 91 27 emit emit emit emit ;
 : home 72 91 27 emit emit emit ;
 : page clear home ;
+
+: numemit
+  dup 10 < if
+    48 + emit
+  else
+    10 /mod
+      48 + emit 48 + emit
+  then ;
+
+: at-xy \ ESC [ line ; column H ;
+  27 emit 91 emit swap numemit 59 emit numemit 72 emit ;
+

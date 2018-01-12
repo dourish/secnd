@@ -1101,7 +1101,6 @@ d114link
 d114code
   .word doupload
 
-dtop
 d115entry
   .byte 4
   .byte "load"
@@ -1109,6 +1108,31 @@ d115link
   .word d114entry
 d115code
   .word doload
+
+d116entry
+  .byte 4
+  .byte "key?"
+d116link
+  .word d115entry
+d116code
+  .word dokeyqu
+
+d117entry
+  .byte 3
+  .byte "nip"
+d117link
+  .word d116entry
+d117code
+  .word donip
+
+dtop
+d118entry
+  .byte 4
+  .byte "tuck"
+d118link
+  .word d117entry
+d118code
+  .word dotuck
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -3278,6 +3302,18 @@ wait_rxd_full
 
   jmp next
 
+;;; implements KEY? -- returns true/false signalling whether there
+;;; is keyboard input waiting to be read.
+dokeyqu
+  dex
+  dex
+  lda ACIA_STATUS
+  and #$08
+  beq nokey
+  jmp settrue
+nokey
+  jmp setfalse
+
 
 ;;; AND, OR, XOR
 ;;;
@@ -3800,6 +3836,38 @@ doload
   inc SOURCE        ; 0 is terminal, non-zero is memory
   jmp next
 
+donip
+  lda stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+  inx
+  inx
+  jmp next
+
+;;; ( x1 x2 -- x2 x1 x2)
+;;;            +5 +3 +1
+dotuck
+  dex
+  dex
+  lda stackbase+3,x
+  pha
+  sta stackbase+1,x
+  lda stackbase+4,x
+  pha
+  sta stackbase+2,x
+
+  lda stackbase+5,x
+  sta stackbase+3,x
+  lda stackbase+6,x
+  sta stackbase+4,x
+
+  pla
+  sta stackbase+6,x
+  pla
+  sta stackbase+5,x
+  jmp next
+  
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
