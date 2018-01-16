@@ -87,6 +87,7 @@ WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
 USERBASE=$2000      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
+DUMP=$C396          ; address of DUMP subroutine from monitor
 
 ;;; FLAGS AND CONSTANTS
 ;;;
@@ -1125,7 +1126,6 @@ d117link
 d117code
   .word donip
 
-dtop
 d118entry
   .byte 4
   .byte "tuck"
@@ -1133,6 +1133,16 @@ d118link
   .word d117entry
 d118code
   .word dotuck
+
+dtop
+d119entry
+  .byte 4
+  .byte "dump"
+d119link
+  .word d118entry
+d119code
+  .word dodump
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -3867,7 +3877,15 @@ dotuck
   pla
   sta stackbase+5,x
   jmp next
-  
+
+;;; Implement DUMP command by calling dump routine from the monitor.
+;;; In Forth, the byte count is on the top of the stack and the base
+;;; address underneath; the monitor looks for them the other way around.
+;;; So to a swap before calling the routine.
+dodump
+  jsr swap16
+  jsr DUMP
+  jmp next
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
