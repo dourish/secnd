@@ -1262,12 +1262,6 @@ next
   lda (IP),y
   sta XT+1
 
-  lda (XT),y        ; XT contains a pointer to a code word. Load
-  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-  dey
-  lda (XT)
-  sta CODEVEC
-
   ;; increment IP by two bytes (one cell) before we move on
 .(
   clc
@@ -1278,6 +1272,11 @@ next
   inc IP+1
 continue
 .)
+
+  lda (XT),y        ; XT contains a pointer to a code word. Load
+  sta CODEVEC+1     ; the code address stored there into CODEVEC.
+  lda (XT)
+  sta CODEVEC
 
   jmp (CODEVEC)     ; execute the code for this instruction/word
 
