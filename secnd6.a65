@@ -2998,7 +2998,36 @@ doparplusloop
   adc stackaccess+1
   sta (RP),y
 
-  jmp testandloop   ; jump to the code that we share with doparenloop
+  ;; for a positive loop increment, we can just use the
+  ;; same code as (LOOP). Check the sign of the increment
+
+  bit stackaccess+1 ; test top bit of increment value
+  bpl testandloop   ; branch when N=0 to shared code with (LOOP)
+
+  ;; it's negative, so we have to do our own test
+  ;; grab the loop limit and stash it in SCRATCH+2/3.
+  ldy #3
+  lda (RP),y
+  sta SCRATCH+2
+  iny
+  lda (RP),y
+  sta SCRATCH+3
+
+  ;; compare index to the loop limit
+.(
+  ldy #1
+  sec
+  lda (RP),y        ; LSB of index
+  sbc SCRATCH+2     ; LSB of limit
+  iny
+  lda (RP),y        ; MSB
+  sbc SCRATCH+3
+  sbc (RP),y
+;  bmi noloop        ; minus if limit > index
+  bpl takeloop
+.)
+  jmp noloop
+
 
 ;;; doparenloop implements (LOOP), which is the run-time code for LOOP.
 ;;; increment and test index and optionally branch back to address
@@ -3037,9 +3066,6 @@ testandloop         ; also entry point for (+LOOP)
   iny
   lda (RP),y
   sbc SCRATCH+3
-;  bvc hop
-;  eor #$80          ; what is this FOR?
-hop
   bpl noloop
 .)
 
@@ -4688,12 +4714,17 @@ do2swap
 ;;; this routine is broken out because we use it in some other
 ;;; places too
 swap32
-  dex               ; make some temporary space
-  dex
-  dex
-  dex
-  lda stackbase+5,x ; cache the two top cells
-  sta stackbase+1,x
+  lda stackbase+1,x ; cache two cells from top of stack
+  pha               ; on the processor's hardware stack
+  lda stackbase+2,x
+  pha
+  lda stackbase+3,x
+  pha
+  lda stackbase+4,x
+  pha
+
+  lda stackbase+5,x ; copy two lower cells into the two cells
+  sta stackbase+1,x ; on the top of the stack
   lda stackbase+6,x
   sta stackbase+2,x
   lda stackbase+7,x
@@ -4701,28 +4732,14 @@ swap32
   lda stackbase+8,x
   sta stackbase+4,x
 
-  lda stackbase+9,x ; copy lower two cells into upper two
-  sta stackbase+5,x
-  lda stackbase+10,x
-  sta stackbase+6,x
-  lda stackbase+11,x
+  pla               ; restore the cached values and place them
+  sta stackbase+8,x ; in the two lower cells
+  pla
   sta stackbase+7,x
-  lda stackbase+12,x
-  sta stackbase+8,x
-
-  lda stackbase+1,x ; replace lower two cells with cached values
-  sta stackbase+9,x
-  lda stackbase+2,x
-  sta stackbase+10,x
-  lda stackbase+3,x
-  sta stackbase+11,x
-  lda stackbase+4,x
-  sta stackbase+12,x
-
-  inx               ; clean up
-  inx
-  inx
-  inx
+  pla
+  sta stackbase+6,x
+  pla
+  sta stackbase+5,x
 
   rts
 
