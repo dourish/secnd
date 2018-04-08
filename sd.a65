@@ -1,0 +1,108 @@
+portb=$8002
+
+  ;; CLK is PB0, ie 1
+  ;; MOSI is PB1, ie 2
+  ;; CS is PB2, ie 4
+  ;; MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
+
+  ;; set mosi
+  ;; set cs
+  lda #%00000110
+  sta portb
+
+  ;; toggle CLK at least 74 times
+  ;;
+  ldy #80 ; decimal 80
+.(
+initloop
+  inc portb
+  dec portb
+  dey
+  bne initloop
+.)
+
+  ;; set cs 0
+  ;; send cmd0 -- 01+6*0+24*0+10010101
+  lda #%01000000
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #%10010101
+  jsr sendbyte
+
+  ;; keep MOSI high
+  ;; set CS low
+  lda #2
+  sta portb
+
+  ;; keep toggling CLK and listen on MISO for it going low
+listenloop
+  inc portb
+  bit portb
+  ;; branch when it goes low
+  bpl recvloop
+  dec portb
+  bra listenloop
+
+recvloop
+  dec portb
+  ;; we have received a zero. grab seven more bits and rotate them
+  ;; into result.
+  lda #0
+  ldy #7
+nextbit
+  inc portb
+  bit portb
+  bmi recvone
+recvzero
+  clc
+  bra recvbit
+recvone
+  sec
+recvbit
+  rol
+  dec portb
+  dey
+  bne nextbit
+
+
+  
+
+
+  ;; should come back within 16 cycles
+
+
+
+
+
+
+sendbyte
+  ldy #8
+sendloop
+  pha
+  clc
+  asl
+  bcc sendzero
+sendone
+  lda portb
+  ora #2
+  sta portb
+  bra send
+sendzero
+  lda portb
+  and #%11111101  
+  sta portb
+send
+  inc portb
+  dec portb
+  pla
+  dey
+  bne sendloop
+  rts
+
+
+
+
+  

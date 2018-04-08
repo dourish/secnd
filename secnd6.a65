@@ -1,6 +1,6 @@
 
 ;;;
-;;; SECND - A FORTH FOR 6502
+;;; SECND - A FORTH FOR 65C02
 ;;;
 ;;; Since "FORTH" is actually an abbreviation of "FOURTH", "SECND"
 ;;; is an abbreviation of "SECOND", it being my second FORTH
@@ -1134,7 +1134,6 @@ d118link
 d118code
   .word dotuck
 
-dtop
 d119entry
   .byte 4
   .byte "dump"
@@ -1143,6 +1142,14 @@ d119link
 d119code
   .word dodump
 
+dtop
+d120entry
+  .byte 5
+  .byte "count"
+d120link
+  .word d119entry
+d120code
+  .word docount
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -3911,6 +3918,27 @@ dodump
   jsr swap16
   jsr DUMP
   jmp next
+
+
+;;; implements COUNT -- take a pointer to a counted string on the stack,
+;;; and turn it into a pointer to the characters and the count.
+docount
+  clc
+  lda stackbase+1,x ; LSB of counted string address
+  sta SCRATCH       ; cache it
+  adc #1            ; add one (to get address of characters)
+  sta stackbase+1,x ; put back
+  lda stackbase+2,x ; now same for MSB
+  sta SCRATCH+1
+  adc #0
+  sta stackbase+2,x
+  lda (SCRATCH)     ; load character count from cached address
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jmp next
+
+  
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC

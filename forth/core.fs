@@ -15,3 +15,9 @@
 : at-xy \ ESC [ line ; column H ;
   27 emit 91 emit swap numemit 59 emit numemit 72 emit ;
 
+( ports and direction registers on the 6522 VIA )
+32768 constant portb
+32769 constant porta
+32770 constant ddrb
+32771 constant ddra
+
