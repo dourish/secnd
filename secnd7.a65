@@ -1143,7 +1143,6 @@ d119link
 d119code
   .word dodump
 
-dtop
 d120entry
   .byte 5
   .byte "count"
@@ -1151,6 +1150,15 @@ d120link
   .word d119entry
 d120code
   .word docount
+
+dtop
+d121entry
+  .byte 6
+  .byte "initsd"
+d121link
+  .word d120entry
+d121code
+  .word doinitsd
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5339,12 +5347,11 @@ setup6522
 doinitsd
   jsr setup6522
   jsr initsd
-  cmp #1
-  bne fail
-  ; print "initialized"
-  bra end
-fail
-  ; print "initialization failed"
+  ;; print whatever we got back
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
 end
   jmp next
 
