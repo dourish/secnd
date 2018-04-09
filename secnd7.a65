@@ -43,7 +43,8 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 1FFF is the interpreter and compiler code (this file)
-;;; 2000 through 7DFF is user dictionary space
+;;; 2000 through 7BFF is user dictionary space
+;;; 7C00 through 7DFF is low-level SD I/O buffer space (512 byte block)
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
 ;;; 7F00 through 7FFF is the input buffer (TIB)
@@ -5329,11 +5330,19 @@ done
 
 ;;;
 ;;; SD CARD SUPPORT
+;;;
+;;; I have an SD breakout card attached to Port B on the 6522. These
+;;; routines are the drivers to initialize, read, and write, as
+;;; well (later) as navigating the FAT16 filesystem.
 ;;; 
-;;; CLK is PB0, ie 1
-;;; MOSI is PB1, ie 2
-;;; CS is PB2, ie 4
-;;; MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
+;;; Wiring details:
+;;;   CLK is PB0, ie 1
+;;;   MOSI is PB1, ie 2
+;;;   CS is PB2, ie 4
+;;;   MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
+;;; MISO, MOSI, and CS all have pull-up resisters, so they are high in
+;;; the idle/unused state, except when pulled low by active circuitry.
+;;;
 
 ;;; set up data direction for PORTB -- lower four bits are outputs
 ;;; and upper four bits are inputs.
@@ -5343,11 +5352,11 @@ setup6522
   rts
 
 
-;;; execute the initialization
+;;; Forth word to execute the initialization code
 doinitsd
   jsr setup6522
   jsr initsd
-  ;; print whatever we got back
+  ;; print whatever we got back -- if it works, should be 0x01
   sta stackaccess
   stz stackaccess+1
   jsr push16
@@ -5373,17 +5382,21 @@ initloop
 .)
 
   ;; set cs to 0
-  ;; send cmd0 (01+6*0+24*0+10010101)
+  lda #0
+  sta PORTB
+
+  ;; send cmd0 (01+6*0 + 24*0 + 10010101)
   lda #%01000000
   jsr sendbyte
   lda #0
   jsr sendbyte
   jsr sendbyte
   jsr sendbyte
+  jsr sendbyte
   lda #%10010101
   jsr sendbyte
 
-  ;; keep MOSI high, set CS low
+  ;; keep MOSI high, keep CS low
   lda #2
   sta PORTB
 
@@ -5418,26 +5431,49 @@ recvbit
   dey               ; decrement our bit count
   bne nextbit       ; loop until we have seven
 
-  ;; and then do something with the result! how do i want to structure
-  ;; this? as a subroutine? just pass result back in acc?
+  ldy #6            ; set CS high to release card
+  sty PORTB
   rts
 
+cmd8
+  ;; set cs to 0
+  lda #0
+  sta PORTB
+
+  ;; send cmd8 with parameter 0x000001aa
+  lda #%01001000
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  lda #1
+  jsr sendbyte
+  lda #$aa
+  jsr sendbyte
+  lda #$87          ; crc
+  jsr sendbyte
+
+  ;; expect 40 bits back? 0x01 followed by arg
+  ;; BUG DO THIS
+  rts
+
+;; do cmd55... that will allow acmd 41...
 
 sendbyte
   ldy #8
 sendloop
-  pha
   clc
   asl
+  pha
   bcc sendzero
 sendone
   lda PORTB
-  ora #2
+  ora #2            ; turn on MOSI
   sta PORTB
   bra send
 sendzero
   lda PORTB
-  and #%11111101  
+  and #253          ; turn off MOSI
   sta PORTB
 send
   inc PORTB
