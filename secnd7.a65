@@ -1152,7 +1152,6 @@ d120link
 d120code
   .word docount
 
-dtop
 d121entry
   .byte 6
   .byte "initsd"
@@ -1160,6 +1159,47 @@ d121link
   .word d120entry
 d121code
   .word doinitsd
+
+d122entry
+  .byte 6
+  .byte "sendff"
+d122link
+  .word d121entry
+d122code
+  .word dosendff
+
+d123entry
+  .byte 4
+  .byte "cmd8"
+d123link
+  .word d122entry
+d123code
+  .word docmd8
+
+d124entry
+  .byte 6
+  .byte "acmd41"
+d124link
+  .word d123entry
+d124code
+  .word doacmd41
+
+d125entry
+  .byte 5
+  .byte "cmd55"
+d125link
+  .word d124entry
+d125code
+  .word docmd55
+
+dtop
+d126entry
+  .byte 4
+  .byte "cmd0"
+d126link
+  .word d125entry
+d126code
+  .word docmd0
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2013,15 +2053,28 @@ dok
 ;;;
 dotor
   jsr pop16
-  jsr rpush
+  ;jsr rpush
+  lda stackbase+1,x
+  sta (RP)
+  dec RP
+  lda stackbase,x
+  sta (RP)
+  dec RP            ; BUG presumes that RP doesn't roll over page boundary
   jmp next
 
 
 ;; dofromr (for Forth word "R>" -- move from r-stack to top of stack
 ;;;
 dofromr
-  jsr rpull
-  jsr push16
+;  jsr rpull
+  dex
+  dex
+  inc RP
+  lda (RP)
+  sta stackbase,x
+  inc RP
+  lda (RP)
+  sta stackbase+1,x
   jmp next
 
 ;;; docolon implements the colon-word... basically, acts like
@@ -5343,6 +5396,19 @@ done
 ;;; MISO, MOSI, and CS all have pull-up resisters, so they are high in
 ;;; the idle/unused state, except when pulled low by active circuitry.
 ;;;
+;;; SD card support code is organized into roughly three layers. The
+;;; lowest is the signalling layer that uses the 6522 to implement the
+;;; SPI protocol. The thin middle layer is a basic layer for reading
+;;; and writing data blocks. The upper layer implements (a subset of)
+;;; the FAT16 filesystem.
+;;;
+SD_CLK  = 1
+SD_MOSI = 2
+SD_CS   = 4
+SD_MISO = 128
+
+;;; LOWEST LAYER (SPI PROTOCOL)
+;;;
 
 ;;; set up data direction for PORTB -- lower four bits are outputs
 ;;; and upper four bits are inputs.
@@ -5351,22 +5417,55 @@ setup6522
   sta VIA_DDRB
   rts
 
-
 ;;; Forth word to execute the initialization code
 doinitsd
   jsr setup6522
-  jsr initsd
+  jsr resetsd
+  jsr cmd0
   ;; print whatever we got back -- if it works, should be 0x01
   sta stackaccess
   stz stackaccess+1
   jsr push16
   jsr print16u
-end
+
+repeat55
+  jsr sendff
+  jsr sendff
+  jsr cmd55
+  jsr awaitbyte
+
+  ;; print whatever we got back -- if it works, should be 0x01
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
+
+  jsr sendff
+  jsr sendff
+  jsr acmd41
+  jsr awaitbto      ; ignore timeouts
+  cmp #0
+  bne repeat55
+  stz stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
   jmp next
 
 
+docmd0
+  jsr setup6522
+  jsr resetsd
+  jsr cmd0
+  ;; print whatever we got back -- if it works, should be 0x01
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
+  jmp next
+
 ;;; initialize the SD card and set it to SPI mode.
-initsd
+resetsd
   lda #%00000110    ; set MOSI and CS to 1
   sta PORTB
 
@@ -5380,7 +5479,9 @@ initloop
   dey
   bne initloop
 .)
+  rts
 
+cmd0
   ;; set cs to 0
   lda #0
   sta PORTB
@@ -5396,48 +5497,56 @@ initloop
   lda #%10010101
   jsr sendbyte
 
-  ;; keep MOSI high, keep CS low
-  lda #2
-  sta PORTB
+  jsr setidle       ; set to idle to await input
 
-  ;; We now wait for an 8-bit response. It will have a leading zero,
-  ;; so keep toggling CLK and listen on MISO for it going low
-listenloop
-  ;; BUG should come back within 16 cycles but not testing for that yet
-  inc PORTB         ; clock on
-  bit PORTB         ; test data input
-  bpl recvloop      ; branch with MISO goes low
-  dec PORTB         ; clock off and repeat
-  bra listenloop
-
-recvloop
-  dec PORTB         ; clock off
-  ;; we have received a zero. grab seven more bits and rotate them
-  ;; into result.
-  lda #0            ; keep result in accumulator
-  ldy #7            ; we want seven bits
-nextbit
-  inc PORTB         ; clock on
-  bit PORTB         ; test input
-  bmi recvone       ; if it's a one
-recvzero
-  clc               ; it's a zero, so clear carry
-  bra recvbit
-recvone
-  sec               ; it's a one, so set carry
-recvbit
-  rol               ; rotate carry into accumulator
-  dec PORTB         ; turn off the clock
-  dey               ; decrement our bit count
-  bne nextbit       ; loop until we have seven
+  jsr awaitdata
+  lda #0
+  jsr recv7bits
 
   ldy #6            ; set CS high to release card
   sty PORTB
   rts
 
+setidle
+  lda #%00000010    ; CLK off, MOSI high, CS low
+  sta PORTB
+  rts  
+
+;; send an $ff... this is basically just about creating delays
+;; between commands
+;; BUG should CS be high or low here?
+sendff
+  ;; set cs to 1
+  lda #1
+  sta PORTB
+  lda #$ff
+  jsr sendbyte
+  rts
+
+;; the forth word version
+dosendff
+  jsr sendff
+  jmp next
+
+;; forth word version for cmd8
+docmd8
+  jsr cmd8
+  lda SCRATCH+2
+  sta stackaccess
+  lda SCRATCH+1
+  sta stackaccess+1
+  jsr push16
+  lda SCRATCH+4
+  sta stackaccess
+  lda SCRATCH+3
+  sta stackaccess+1
+  jsr push16
+  jsr print32s
+  jmp next
+
 cmd8
   ;; set cs to 0
-  lda #0
+  lda #0    ; BUG? SHOULD JUST BE SETTING THE CS BIT?
   sta PORTB
 
   ;; send cmd8 with parameter 0x000001aa
@@ -5453,11 +5562,95 @@ cmd8
   lda #$87          ; crc
   jsr sendbyte
 
-  ;; expect 40 bits back? 0x01 followed by arg
-  ;; BUG DO THIS
+  jsr setidle
+  jsr await40bits
+
+  ldy #6            ; set CS high to release card (AND MOSI TOO?)
+  sty PORTB
   rts
 
 ;; do cmd55... that will allow acmd 41...
+docmd55
+.(
+  jsr cmd55
+  jsr awaitbto
+  bcs timedout
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
+  jmp next
+timedout
+  jsr prtimeout
+  jmp next
+.)
+  
+doacmd41
+.(
+  jsr acmd41
+  jsr awaitbto
+  bcs timedout
+  jsr setidle
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jsr print16u
+  jmp next
+timedout
+  jsr prtimeout
+  jmp next
+.)
+
+acmd41
+  lda #%01101001
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #$95          ; checksum, but doesn't matter in SPI mode
+  jsr sendbyte
+  rts
+
+cmd55
+  ;; set cs to 0
+  lda #0
+  sta PORTB
+
+  ;; send cmd55 with parameter 0
+  lda #%01110111
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #$95          ; crc
+  jsr sendbyte
+
+  rts
+
+prtimeout
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda timeoutmsg,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+  rts
+.)
+
+
+;;; lowest levels -- send a byte, receive a byte...
+
 
 sendbyte
   ldy #8
@@ -5483,35 +5676,99 @@ send
   bne sendloop
   rts
 
-
-
-;;;
-;;; support routines
-;;;
-
-rpush
-  lda stackaccess+1
-  sta (RP)
-  dec RP
-  lda stackaccess
-  sta (RP)
-  dec RP            ; BUG presumes that RP doesn't roll over page boundary
+;; wait for data by pulsing the clock until there's a zero on MISO
+awaitdata
+.(
+  inc PORTB         ; set CLK high
+  bit PORTB         ; check for data on MISO
+  bpl done          ; exit if we see a zdero
+  dec PORTB         ; otherwise, set CLK low and 
+  bra awaitdata     ; loop around again
+done
+  dec PORTB
+.)
   rts
 
-
-rpull
-  inc RP
-  lda (RP)
-  sta stackaccess
-  inc RP
-  lda (RP)
-  sta stackaccess+1
+;; wait with a timeout. if we don't hear something within 256 pulses,
+;; set carry flag and return
+awaittimeout
+.(
+  clc
+  ldy #0
+awaitloop
+  inc PORTB
+  bit PORTB
+  bpl done
+  dec PORTB
+  dey
+  beq timeout
+  bra awaitloop
+timeout
+  sec
   rts
+done
+  dec PORTB
+  rts
+.)
+
+;; wait for data and then receive a byte starting with zero
+awaitbyte
+  jsr awaitdata
+  lda #0
+  jmp recv7bits
+
+;; wait for byte with timeout (signalled with carry)
+awaitbto
+  jsr awaittimeout
+  bcs timeout
+  lda #0
+  jmp recv7bits
+timeout
+  rts
+  
+await40bits
+  jsr awaitdata     ; wait for any data
+  jsr recv7bits     ; grab first 7 bits (presuming leading 0)
+  sta SCRATCH
+  jsr recv8bits     ; second byte
+  sta SCRATCH+1
+  jsr recv8bits     ; third byte
+  sta SCRATCH+2
+  jsr recv8bits     ; fourth byte
+  sta SCRATCH+3
+  jsr recv8bits     ; fifth byte
+  sta SCRATCH+4
+  rts
+
+recv8bits
+  lda #0            ; zero out result
+  inc PORTB         ; set clock high
+  lda PORTB         ; read data
+  cmp #128          ; this sets carry flag to top bit
+  rol               ; shift carry into A
+  dec PORTB         ; set clock off
+  ;; now fall through to receive next seven bits
+
+recv7bits
+.(
+  ldy #7            ; count up to seven bits
+  phx               ; store X, since we'll use it
+recvloop
+  inc PORTB         ; set CLK high
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+  dey               ; update bit count
+  bne recvloop      ; loop until finished
+  plx               ; restore X
+.)
+  rts               ; return with data in A
 
 
 
 ;;;
-;;; I/O SUPPORT ROUTINES
+;;; USER I/O SUPPORT ROUTINES
 ;;; These have been "borrowed" from mitemon
 ;;;
 
@@ -5951,3 +6208,4 @@ compileerr:      .byte "  compile-only word encountered", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
 inityesmsg:      .byte " initialized", $0d, $0a, $00
 initnosmsg:      .byte " initialization failed", $0d, $0a, $00
+timeoutmsg:      .byte " timeout", $0d, $0a, $00
