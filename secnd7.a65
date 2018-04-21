@@ -7,7 +7,8 @@
 ;;; implementation. The last one was over 30 years ago, but let's
 ;;; not worry about that now. This time, I'm sticking closer to
 ;;; standards, albeit outdated ones; the starting point for this
-;;; is FigFORTH although it may get ANSIfied along the way.
+;;; is FigFORTH although it has become gradually ANSified along the
+;;; way.
 ;;;
 ;;; I'm building this for my single-board 65C02 computer, the Mite.
 ;;; It can run in ROM or RAM; for now, the memory map is built
@@ -26,6 +27,7 @@
 ;;; v06  cleaning up and debugging, various new words, more internal
 ;;;      elements available to Forth, performance improvements.
 ;;; v07  testbed for SD card integration
+;;;
 
   * = $0300
 
@@ -87,7 +89,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$2000      ; staring address for user code
+USERBASE=$2800      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 
@@ -151,6 +153,9 @@ coldstart
   sta DP
   lda #>USERBASE
   sta DP+1
+
+  ;; initialize the 6522 for the SD routines
+  jsr setup6522
 
   ;; jump to text interpreter
   jmp startinterp
@@ -2052,14 +2057,16 @@ dok
 ;; dotor (for the Forth word ">R" -- move from top of stack onto r-stack
 ;;;
 dotor
-  jsr pop16
+  ;jsr pop16
   ;jsr rpush
-  lda stackbase+1,x
+  lda stackbase+2,x
   sta (RP)
   dec RP
-  lda stackbase,x
+  lda stackbase+1,x
   sta (RP)
   dec RP            ; BUG presumes that RP doesn't roll over page boundary
+  inx
+  inx
   jmp next
 
 
@@ -2071,10 +2078,10 @@ dofromr
   dex
   inc RP
   lda (RP)
-  sta stackbase,x
+  sta stackbase+1,x
   inc RP
   lda (RP)
-  sta stackbase+1,x
+  sta stackbase+2,x
   jmp next
 
 ;;; docolon implements the colon-word... basically, acts like
@@ -5419,7 +5426,7 @@ setup6522
 
 ;;; Forth word to execute the initialization code
 doinitsd
-  jsr setup6522
+.(
   jsr resetsd
   jsr cmd0
   ;; print whatever we got back -- if it works, should be 0x01
@@ -5428,40 +5435,105 @@ doinitsd
   jsr push16
   jsr print16u
 
+  jsr sendff
+  jsr sendff
+  jsr cmd8
+  lda SCRATCH+3
+  sta stackaccess+1
+  lda SCRATCH+4
+  sta stackaccess
+  jsr push16
+  jsr print16u
+  jsr setidle
+
+  lda #50           ; going to try this up to 50 times
+  sta SCRATCH
+
 repeat55
+  lda #$3f          ; ascii "?"
+  jsr puta
   jsr sendff
   jsr sendff
   jsr cmd55
-  jsr awaitbyte
+;  jsr awaitbyte
+  jsr setidle
+  jsr getresponse
 
-  ;; print whatever we got back -- if it works, should be 0x01
+  ;; print whatever we got back -- if it works, should be 0x01?
   sta stackaccess
   stz stackaccess+1
   jsr push16
   jsr print16u
 
+  lda #$61
+  jsr puta
   jsr sendff
+  lda #$62
+  jsr puta
   jsr sendff
+  lda #$63
+  jsr puta
   jsr acmd41
-  jsr awaitbto      ; ignore timeouts
-  cmp #0
+  lda #$64
+  jsr puta
+;  jsr awaitbto
+;  bcs repeat55      ; if there was a timeout, loop
+  jsr setidle
+  lda #$65
+  jsr puta
+  jsr getresponse
+  cmp #0            ; loop until we get a 0 response
+  beq success
+
+  sta stackaccess
+  stz stackaccess+1
+  lda #$66
+  jsr puta
+  jsr push16
+  lda #$67
+  jsr puta
+  jsr print16u
+  lda #$68
+  jsr puta
+
+  lda #2
+  sta SCRATCH+1
+delayouter
+  dec SCRATCH+1
+  beq loopdone
+  ldy #255
+delayinner
+  dey
+  bne delayinner
+  bra delayouter
+loopdone
+  dec SCRATCH
   bne repeat55
+
+failure
+  lda #$24         ; ascii "-"
+  jsr puta
+  bra done
+
+success
+  lda #$21          ; ascii "!"
+  jsr puta
   stz stackaccess
   stz stackaccess+1
   jsr push16
   jsr print16u
+done
   jmp next
+.)
 
 
 docmd0
-  jsr setup6522
   jsr resetsd
   jsr cmd0
-  ;; print whatever we got back -- if it works, should be 0x01
+  ;; push whatever came back onto the stack
   sta stackaccess
   stz stackaccess+1
   jsr push16
-  jsr print16u
   jmp next
 
 ;;; initialize the SD card and set it to SPI mode.
@@ -5483,8 +5555,8 @@ initloop
 
 cmd0
   ;; set cs to 0
-  lda #0
-  sta PORTB
+  lda #4
+  trb PORTB
 
   ;; send cmd0 (01+6*0 + 24*0 + 10010101)
   lda #%01000000
@@ -5499,17 +5571,18 @@ cmd0
 
   jsr setidle       ; set to idle to await input
 
-  jsr awaitdata
-  lda #0
-  jsr recv7bits
+;  jsr awaitdata
+;  lda #0
+;  jsr recv7bits
+  jsr getresponse
 
-  ldy #6            ; set CS high to release card
+  ldy #6            ; set CS and MOSI high to release card
   sty PORTB
   rts
 
 setidle
-  lda #%00000010    ; CLK off, MOSI high, CS low
-  sta PORTB
+  ldy #%00000010    ; CLK off, MOSI high, CS low
+  sty PORTB
   rts  
 
 ;; send an $ff... this is basically just about creating delays
@@ -5517,8 +5590,8 @@ setidle
 ;; BUG should CS be high or low here?
 sendff
   ;; set cs to 1
-  lda #1
-  sta PORTB
+  lda #4
+  tsb PORTB
   lda #$ff
   jsr sendbyte
   rts
@@ -5530,24 +5603,20 @@ dosendff
 
 ;; forth word version for cmd8
 docmd8
+  jsr sendff
   jsr cmd8
-  lda SCRATCH+2
-  sta stackaccess
-  lda SCRATCH+1
-  sta stackaccess+1
-  jsr push16
+  ;; push lower 16 bits of what we get back onto the stack
   lda SCRATCH+4
   sta stackaccess
   lda SCRATCH+3
   sta stackaccess+1
   jsr push16
-  jsr print32s
   jmp next
 
 cmd8
   ;; set cs to 0
-  lda #0    ; BUG? SHOULD JUST BE SETTING THE CS BIT?
-  sta PORTB
+  lda #4
+  trb PORTB
 
   ;; send cmd8 with parameter 0x000001aa
   lda #%01001000
@@ -5561,62 +5630,29 @@ cmd8
   jsr sendbyte
   lda #$87          ; crc
   jsr sendbyte
-
   jsr setidle
+
   jsr await40bits
 
-  ldy #6            ; set CS high to release card (AND MOSI TOO?)
-  sty PORTB
+  lda #6            ; release card (CS and MOSI high)
+  sta PORTB
+
   rts
 
 ;; do cmd55... that will allow acmd 41...
 docmd55
 .(
   jsr cmd55
-  jsr awaitbto
-  bcs timedout
   sta stackaccess
   stz stackaccess+1
   jsr push16
-  jsr print16u
-  jmp next
-timedout
-  jsr prtimeout
   jmp next
 .)
-  
-doacmd41
-.(
-  jsr acmd41
-  jsr awaitbto
-  bcs timedout
-  jsr setidle
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jsr print16u
-  jmp next
-timedout
-  jsr prtimeout
-  jmp next
-.)
-
-acmd41
-  lda #%01101001
-  jsr sendbyte
-  lda #0
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  jsr sendbyte
-  lda #$95          ; checksum, but doesn't matter in SPI mode
-  jsr sendbyte
-  rts
 
 cmd55
   ;; set cs to 0
-  lda #0
-  sta PORTB
+  lda #4
+  trb PORTB
 
   ;; send cmd55 with parameter 0
   lda #%01110111
@@ -5629,7 +5665,44 @@ cmd55
   lda #$95          ; crc
   jsr sendbyte
 
+  jsr setidle
+  jsr getresponse
+  ldy #6
+  sty PORTB
   rts
+
+  
+doacmd41
+.(
+  jsr acmd41
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jmp next
+.)
+
+acmd41
+  ;; set cs to 0
+  lda #4
+  trb PORTB
+
+  lda #%01101001
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #$95          ; checksum, but doesn't matter in SPI mode?
+  jsr sendbyte
+
+  jsr setidle
+  jsr getresponse
+
+  ldy #6
+  sty PORTB
+  rts
+
 
 prtimeout
   ldy #0
@@ -5739,6 +5812,21 @@ await40bits
   jsr recv8bits     ; fifth byte
   sta SCRATCH+4
   rts
+
+getresponse
+.(
+  phx
+  ldx #0
+loop
+  inx
+  beq timedout
+  jsr recv8bits
+  cmp #$ff
+  beq loop
+timedout
+  plx
+  rts
+.)
 
 recv8bits
   lda #0            ; zero out result
