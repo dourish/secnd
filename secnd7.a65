@@ -1197,7 +1197,6 @@ d125link
 d125code
   .word docmd55
 
-dtop
 d126entry
   .byte 4
   .byte "cmd0"
@@ -1205,6 +1204,15 @@ d126link
   .word d125entry
 d126code
   .word docmd0
+
+dtop
+d127entry
+  .byte 5
+  .byte "cmd58"
+d127link
+  .word d126entry
+d127code
+  .word docmd58
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5418,7 +5426,7 @@ SD_MISO = 128
 ;;;
 
 ;;; set up data direction for PORTB -- lower four bits are outputs
-;;; and upper four bits are inputs.
+;;; and upper four bits are inputs. This is called from FORTH startup.
 setup6522
   lda #15
   sta VIA_DDRB
@@ -5538,12 +5546,12 @@ docmd0
 
 ;;; initialize the SD card and set it to SPI mode.
 resetsd
-  lda #%00000110    ; set MOSI and CS to 1
+  lda #SD_CS+SD_MOSI  ; set MOSI and CS to 1
   sta PORTB
 
-  ;; toggle CLK at least 74 times
+  ;; toggle CLK at least 74 times (ie do 80, for 10 bytes of FF)
   ;;
-  ldy #80           ; decimal 80
+  ldy #80
 .(
 initloop
   inc PORTB
@@ -5555,7 +5563,7 @@ initloop
 
 cmd0
   ;; set cs to 0
-  lda #4
+  lda #SD_CS
   trb PORTB
 
   ;; send cmd0 (01+6*0 + 24*0 + 10010101)
@@ -5566,17 +5574,13 @@ cmd0
   jsr sendbyte
   jsr sendbyte
   jsr sendbyte
-  lda #%10010101
+  lda #%10010101    ; CRC plus end bit
   jsr sendbyte
 
   jsr setidle       ; set to idle to await input
+  jsr getresponse   ; get single byte response
 
-;  jsr awaitdata
-;  lda #0
-;  jsr recv7bits
-  jsr getresponse
-
-  ldy #6            ; set CS and MOSI high to release card
+  ldy #SD_CS+SD_MOSI ; set CS and MOSI high to release card
   sty PORTB
   rts
 
@@ -5587,10 +5591,9 @@ setidle
 
 ;; send an $ff... this is basically just about creating delays
 ;; between commands
-;; BUG should CS be high or low here?
 sendff
   ;; set cs to 1
-  lda #4
+  lda #SD_CS
   tsb PORTB
   lda #$ff
   jsr sendbyte
@@ -5603,15 +5606,32 @@ dosendff
 
 ;; forth word version for cmd8
 docmd8
+.(
   jsr sendff
   jsr cmd8
+
+  ;; if any bit other that the low order bit is set
+  ;; on the response, then return that.
+  lda SCRATCH
+  and #254
+  beq returndata
+
+  ;; we got a signal of an illegal command. return it
+  lda SCRATCH
+  sta stackaccess
+  stz stackaccess+1
+  bra end
+
+returndata
   ;; push lower 16 bits of what we get back onto the stack
   lda SCRATCH+4
   sta stackaccess
   lda SCRATCH+3
   sta stackaccess+1
+end
   jsr push16
   jmp next
+.)
 
 cmd8
   ;; set cs to 0
@@ -5630,18 +5650,65 @@ cmd8
   jsr sendbyte
   lda #$87          ; crc
   jsr sendbyte
-  jsr setidle
 
+  jsr setidle
   jsr await40bits
 
-  lda #6            ; release card (CS and MOSI high)
+  lda #SD_CS+SD_MOSI  ; release card (CS and MOSI high)
   sta PORTB
 
   rts
 
+;; do cmd58, which gets a long response
+docmd58
+  jsr sendff
+  jsr cmd58
+  lda SCRATCH+1
+  sta stackaccess+1
+  lda SCRATCH+2
+  sta stackaccess
+  jsr push16
+  lda SCRATCH+3
+  sta stackaccess+1
+  lda SCRATCH+4
+  sta stackaccess
+  jsr push16
+  lda SCRATCH
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jmp next
+
+cmd58
+  ;; set cs to 0
+  lda #4
+  trb PORTB
+
+  ;; send cmd58
+  lda #%01111010
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #%01110101
+  jsr sendbyte
+
+  jsr setidle
+  jsr await40bits
+
+  lda #SD_CS+SD_MOSI  ; release card (CS and MOSI high)
+  sta PORTB
+
+  rts
+
+
+
 ;; do cmd55... that will allow acmd 41...
 docmd55
 .(
+  jsr sendff
   jsr cmd55
   sta stackaccess
   stz stackaccess+1
@@ -5651,7 +5718,7 @@ docmd55
 
 cmd55
   ;; set cs to 0
-  lda #4
+  lda #SD_CS
   trb PORTB
 
   ;; send cmd55 with parameter 0
@@ -5674,6 +5741,7 @@ cmd55
   
 doacmd41
 .(
+  jsr sendff
   jsr acmd41
   sta stackaccess
   stz stackaccess+1
@@ -5688,9 +5756,11 @@ acmd41
 
   lda #%01101001
   jsr sendbyte
+  lda #%01000000    ; bit 30 is HCS flag
+  jsr sendbyte
+  lda #16           ; bit 20 selects 3.2-3.3V
+  jsr sendbyte
   lda #0
-  jsr sendbyte
-  jsr sendbyte
   jsr sendbyte
   jsr sendbyte
   lda #$95          ; checksum, but doesn't matter in SPI mode?
@@ -5728,19 +5798,16 @@ done
 sendbyte
   ldy #8
 sendloop
-  clc
   asl
   pha
   bcc sendzero
 sendone
-  lda PORTB
-  ora #2            ; turn on MOSI
-  sta PORTB
+  lda #SD_MOSI
+  tsb PORTB
   bra send
 sendzero
-  lda PORTB
-  and #253          ; turn off MOSI
-  sta PORTB
+  lda #SD_MOSI
+  trb PORTB
 send
   inc PORTB
   dec PORTB
