@@ -1230,12 +1230,12 @@ d128code
 
 dtop
 d129entry
-  .byte 8
-  .byte "getblock"
+  .byte 9
+  .byte "loadblock"
 d129link
   .word d128entry
 d129code
-  .word dogetblock
+  .word doloadblock
 
 
 ;d101entry
@@ -5865,6 +5865,44 @@ loop
   rts
 
 
+doloadblock
+  jsr sdloadblock
+  jmp next
+
+
+;;; Load block specified by double on the stack, translating between
+;;; number formats.
+sdloadblock
+  ;; set cs to 0
+  lda #SD_CS
+  trb PORTB
+
+  ;; send cmd17 with parameter from the stack
+  lda #SPI_CMD+17
+  jsr sendbyte
+  lda stackaccess+4,x
+  jsr sendbyte
+  lda stackaccess+3,x
+  jsr sendbyte
+  lda stackaccess+2,x
+  jsr sendbyte
+  lda stackaccess+1,x
+  jsr sendbyte
+  lda #$95          ; crc, doesn't matter
+  jsr sendbyte
+
+  inx               ; clean up the stack
+  inx
+  inx
+  inx
+
+  jsr setidle
+  jsr getresponse
+
+  jsr gettoken
+  jsr getblock
+
+  rts
 
 
 prtimeout
