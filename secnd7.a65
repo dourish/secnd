@@ -67,7 +67,7 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; CWORD holds a pointer to the word currently being compiled
 ;;; SOURCE indicates where input is coming from (0 for terminal)
 ;;; INPUT points to the input buffer
-;;; WORD points to the temporary string processing space
+n;;; WORD points to the temporary string processing space
 ;;; INBUFF points to the current non-terminal input area
 ;;; 
 ;;;
@@ -92,10 +92,17 @@ INPUT=$7F00         ; input space
 USERBASE=$2800      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
+LBLOCK=$7C00        ; address of lower I/O data page
+HBLOCK=$7D00        ; address of upper I/O data page
+
+MBR=$0200           ; cache SD card master boot record in unused stack space
+MBR_NFATS=$0210     ; address of FAT count within cache
+MBR_LABEL=$022B     ; address of label within cache
 
 ;;; FLAGS AND CONSTANTS
 ;;;
 COMPILE=%00000001   ; status flags
+SPI_CMD=64
 
 IMM=%00100000       ; flag for IMMEDIATE word (ie executed in compile mode)
 
@@ -1205,7 +1212,6 @@ d126link
 d126code
   .word docmd0
 
-dtop
 d127entry
   .byte 5
   .byte "cmd58"
@@ -1213,6 +1219,24 @@ d127link
   .word d126entry
 d127code
   .word docmd58
+
+d128entry
+  .byte 5
+  .byte "cmd17"
+d128link
+  .word d127entry
+d128code
+  .word docmd17
+
+dtop
+d129entry
+  .byte 8
+  .byte "getblock"
+d129link
+  .word d128entry
+d129code
+  .word dogetblock
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5435,104 +5459,103 @@ setup6522
 ;;; Forth word to execute the initialization code
 doinitsd
 .(
+  ;; BUG should test for card present
   jsr resetsd
   jsr cmd0
-  ;; print whatever we got back -- if it works, should be 0x01
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jsr print16u
+  cmp #1
+  bne abortcardfail
 
-  jsr sendff
   jsr sendff
   jsr cmd8
-  lda SCRATCH+3
-  sta stackaccess+1
-  lda SCRATCH+4
-  sta stackaccess
-  jsr push16
-  jsr print16u
-  jsr setidle
+  ;; BUG test the response
 
-  lda #50           ; going to try this up to 50 times
+  lda #100           ; going to try this up to 100 times
   sta SCRATCH
 
 repeat55
-  lda #$3f          ; ascii "?"
-  jsr puta
-  jsr sendff
   jsr sendff
   jsr cmd55
-;  jsr awaitbyte
-  jsr setidle
-  jsr getresponse
-
-  ;; print whatever we got back -- if it works, should be 0x01?
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jsr print16u
-
-  lda #$61
-  jsr puta
   jsr sendff
-  lda #$62
-  jsr puta
-  jsr sendff
-  lda #$63
-  jsr puta
   jsr acmd41
-  lda #$64
-  jsr puta
-;  jsr awaitbto
-;  bcs repeat55      ; if there was a timeout, loop
-  jsr setidle
-  lda #$65
-  jsr puta
-  jsr getresponse
   cmp #0            ; loop until we get a 0 response
   beq success
 
-  sta stackaccess
-  stz stackaccess+1
-  lda #$66
-  jsr puta
-  jsr push16
-  lda #$67
-  jsr puta
-  jsr print16u
-  lda #$68
-  jsr puta
-
-  lda #2
-  sta SCRATCH+1
-delayouter
-  dec SCRATCH+1
-  beq loopdone
-  ldy #255
-delayinner
-  dey
-  bne delayinner
-  bra delayouter
-loopdone
   dec SCRATCH
   bne repeat55
-
-failure
-  lda #$24         ; ascii "-"
-  jsr puta
-  bra done
+  jmp abortcardfail
 
 success
-  lda #$21          ; ascii "!"
-  jsr puta
-  stz stackaccess
-  stz stackaccess+1
-  jsr push16
-  jsr print16u
+  jsr sendff
+  jsr cmd17
+
+  jsr gettoken
+  jsr getblock
+
+.(
+
+  ;; copy first 64 bytes into MBR area
+  ldy #0
+loop
+  lda LBLOCK,y
+  sta MBR,y
+  iny
+  cpy #64
+  bne loop
+.)
+
+  ;; print a message with the card name
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda initializedmsg,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+
+.(
+  ldy #0
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda MBR_LABEL,y
+  sta ACIA_DATA
+  iny
+  cpy #11
+  bne next_char
+.)
+
 done
   jmp next
 .)
+
+
+;;; ABORT with a message about card not initializing
+abortcardfail
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda cardfailmsg,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+  jmp abort
+
 
 
 docmd0
@@ -5567,7 +5590,7 @@ cmd0
   trb PORTB
 
   ;; send cmd0 (01+6*0 + 24*0 + 10010101)
-  lda #%01000000
+  lda #SPI_CMD+0
   jsr sendbyte
   lda #0
   jsr sendbyte
@@ -5639,7 +5662,7 @@ cmd8
   trb PORTB
 
   ;; send cmd8 with parameter 0x000001aa
-  lda #%01001000
+  lda #SPI_CMD+8
   jsr sendbyte
   lda #0
   jsr sendbyte
@@ -5685,7 +5708,7 @@ cmd58
   trb PORTB
 
   ;; send cmd58
-  lda #%01111010
+  lda #SPI_CMD+58
   jsr sendbyte
   lda #0
   jsr sendbyte
@@ -5722,7 +5745,7 @@ cmd55
   trb PORTB
 
   ;; send cmd55 with parameter 0
-  lda #%01110111
+  lda #SPI_CMD+55
   jsr sendbyte
   lda #0
   jsr sendbyte
@@ -5754,7 +5777,7 @@ acmd41
   lda #4
   trb PORTB
 
-  lda #%01101001
+  lda #SPI_CMD+41
   jsr sendbyte
   lda #%01000000    ; bit 30 is HCS flag
   jsr sendbyte
@@ -5772,6 +5795,76 @@ acmd41
   ldy #6
   sty PORTB
   rts
+
+docmd17
+  jsr sendff
+  jsr cmd17
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+  jmp next  
+
+cmd17
+  ;; set cs to 0
+  lda #SD_CS
+  trb PORTB
+
+  ;; send cmd17 with parameter 0
+  lda #SPI_CMD+17
+  jsr sendbyte
+  lda #0
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  jsr sendbyte
+  lda #$95          ; crc, doesn't matter
+  jsr sendbyte
+
+  jsr setidle
+  jsr getresponse
+  rts
+
+dogetblock
+  jsr gettoken
+  jsr getblock
+  jmp next
+
+gettoken
+  ; listen until we hear %11111110 (254/$FE)
+  jsr recv8bits
+  cmp #$FE
+  bne gettoken
+  rts
+
+getblock
+.(
+  ;; get 256 bytes at xx
+  stz SCRATCH+8
+  lda #>LBLOCK
+  sta SCRATCH+9
+loop
+  jsr recv8bits
+  sta (SCRATCH+8)
+  inc SCRATCH+8
+  bne loop
+.)
+.(
+  ;; get 256 bytes at yy
+  stz SCRATCH+8
+  lda #>HBLOCK
+  sta SCRATCH+9
+loop
+  jsr recv8bits
+  sta (SCRATCH+8)
+  inc SCRATCH+8
+  bne loop
+.)
+  ; get CRC but ignore it. 16 bits, so two byte reads.
+  jsr recv8bits
+  jsr recv8bits
+  rts
+
+
 
 
 prtimeout
@@ -5895,6 +5988,7 @@ timedout
   rts
 .)
 
+;; TODO unroll this, probably a good deal faster then looping
 recv8bits
   lda #0            ; zero out result
   inc PORTB         ; set clock high
@@ -6364,3 +6458,5 @@ exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
 inityesmsg:      .byte " initialized", $0d, $0a, $00
 initnosmsg:      .byte " initialization failed", $0d, $0a, $00
 timeoutmsg:      .byte " timeout", $0d, $0a, $00
+cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
+initializedmsg:  .byte " initialized ", $00
