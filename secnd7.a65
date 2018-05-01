@@ -1239,7 +1239,6 @@ loadblockcode
 d129code
   .word doloadblock
 
-dtop
 d130entry
   .byte 9
   .byte "dumpblock"
@@ -1256,6 +1255,16 @@ d130param
   .word 240
   .word dumpcode
   .word exitcode
+
+dtop
+d131entry
+  .byte 3
+  .byte "dir"
+d131link
+  .word d130entry
+d131code
+  .word dodir
+
 
 
 ;d101entry
@@ -5957,6 +5966,98 @@ abortread
   sec               ; set carry to signal failure
   rts
 .)
+
+
+;;; List files from the root directory
+;;;
+dodir
+  ;; BUG check that there's a disk mounted and present
+  ;; load the root directory -- just hardcoding location for now
+  ;; BUG calculate this properly
+  stz stackaccess
+  stz stackaccess+1
+  jsr push16
+  lda #2            ; block 513 = 2 in MSB and 1 in LSB
+  sta stackaccess+1
+  lda #1
+  sta stackaccess
+  jsr push16
+  jsr sdloadblock
+  bcc startdir
+  jmp abortdiskerror
+  
+startdir
+  ;; set pointer to first entry
+  lda #<LBLOCK
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+  jsr crlf
+
+printdirent         ; print the entry pointed to by SCRATCH+6
+
+  lda (SCRATCH+6)
+  beq endofdir      ; if it's null, we're done
+
+  ldy #11           ; check for hidden file
+  lda (SCRATCH+6),y
+  and #2
+  bne nextdirent    ; skip hidden files
+
+  ;; print the file name (and then extension)
+  ldy #0
+.(
+nextchar
+  lda (SCRATCH+6),y
+  cmp #$20          ; if we hit a space, presume it's padding and skip to end
+  beq endofname
+  jsr puta
+  iny
+  cpy #8            ; stop after eight characters
+  beq printext
+  bra nextchar
+endofname
+  ldy #8
+.)
+
+printext            ; now print extension, if there is one
+  lda (SCRATCH+6),y
+  cmp #$20          ; end at first space
+  beq endofext
+  pha
+  lda #"."          ; print a dot before first actual character
+  jsr puta
+  pla
+  jsr puta
+  iny
+  lda (SCRATCH+6),y
+  cmp #20
+  beq endofext
+  jsr puta
+  iny
+  lda (SCRATCH+6),y
+  cmp #20
+  beq endofext
+  jsr puta
+endofext
+  jsr crlf
+
+nextdirent
+.(
+  clc               ; add 32 to skip to next entry
+  lda SCRATCH+6
+  adc #32
+  sta SCRATCH+6
+bcc done
+  inc SCRATCH+7
+done
+.)
+  bra printdirent
+
+endofdir
+  jsr crlf
+
+  jmp next
 
   
 
