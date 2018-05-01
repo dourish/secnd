@@ -336,6 +336,7 @@ d18entry
   .byte "cr"
 d18link
   .word d17entry
+crcode
 d18code
   .word docr
 
@@ -1153,6 +1154,7 @@ d119entry
   .byte "dump"
 d119link
   .word d118entry
+dumpcode
 d119code
   .word dodump
 
@@ -1228,14 +1230,32 @@ d128link
 d128code
   .word docmd17
 
-dtop
 d129entry
   .byte 9
   .byte "loadblock"
 d129link
   .word d128entry
+loadblockcode
 d129code
   .word doloadblock
+
+dtop
+d130entry
+  .byte 9
+  .byte "dumpblock"
+d130link
+  .word d129entry
+d130code
+  .word dolist
+d130param
+  .word loadblockcode
+  .word crcode
+  .word dolitcode
+  .word 31744
+  .word dolitcode
+  .word 240
+  .word dumpcode
+  .word exitcode
 
 
 ;d101entry
@@ -5556,6 +5576,23 @@ done
 .)
   jmp abort
 
+;;; ABORT with a disk error
+abortdiskerror
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda diskerrormsg,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+  jmp abort
 
 
 docmd0
@@ -5862,17 +5899,26 @@ loop
   ; get CRC but ignore it. 16 bits, so two byte reads.
   jsr recv8bits
   jsr recv8bits
+
+  jsr sendff        ; eight clock ticks to let SD card finish up
   rts
 
 
 doloadblock
+.(
   jsr sdloadblock
+  bcc done
+  jmp abortdiskerror
+done
   jmp next
+.)
 
 
 ;;; Load block specified by double on the stack, translating between
 ;;; number formats.
 sdloadblock
+  jsr sendff
+
   ;; set cs to 0
   lda #SD_CS
   trb PORTB
@@ -5880,13 +5926,13 @@ sdloadblock
   ;; send cmd17 with parameter from the stack
   lda #SPI_CMD+17
   jsr sendbyte
-  lda stackaccess+4,x
+  lda stackbase+4,x
   jsr sendbyte
-  lda stackaccess+3,x
+  lda stackbase+3,x
   jsr sendbyte
-  lda stackaccess+2,x
+  lda stackbase+2,x
   jsr sendbyte
-  lda stackaccess+1,x
+  lda stackbase+1,x
   jsr sendbyte
   lda #$95          ; crc, doesn't matter
   jsr sendbyte
@@ -5896,31 +5942,23 @@ sdloadblock
   inx
   inx
 
+.(
   jsr setidle
   jsr getresponse
+  cmp #0
+  bne abortread
 
   jsr gettoken
   jsr getblock
-
+  clc               ; operation successful, so clear carry
   rts
 
-
-prtimeout
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda timeoutmsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
+abortread
+  sec               ; set carry to signal failure
   rts
 .)
+
+  
 
 
 ;;; lowest levels -- send a byte, receive a byte...
@@ -6498,3 +6536,4 @@ initnosmsg:      .byte " initialization failed", $0d, $0a, $00
 timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
 initializedmsg:  .byte " initialized ", $00
+diskerrormsg:    .byte " disk error", $0d, $0a, $00
