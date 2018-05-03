@@ -1256,7 +1256,6 @@ d130param
   .word dumpcode
   .word exitcode
 
-dtop
 d131entry
   .byte 3
   .byte "dir"
@@ -1265,6 +1264,14 @@ d131link
 d131code
   .word dodir
 
+dtop
+d132entry
+  .byte 4
+  .byte "show"
+d132link
+  .word d131entry
+d132code
+  .word doshow
 
 
 ;d101entry
@@ -5983,8 +5990,40 @@ dodir
   sta stackaccess
   jsr push16
   jsr sdloadblock
-  bcc startdir
+  bcc header
   jmp abortdiskerror
+
+header
+  jsr crlf
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda dirofmsg,y
+  beq done
+  sta ACIA_DATA
+  iny
+  jmp next_char
+done
+.)
+
+  ldy #0
+.(
+loop
+  lda MBR_LABEL,y
+  cmp #$20
+  beq done
+  jsr puta
+  iny
+  cpy #11
+  beq done
+  bra loop
+done
+.)
+  jsr crlf
   
 startdir
   ;; set pointer to first entry
@@ -5992,7 +6031,6 @@ startdir
   sta SCRATCH+6
   lda #>LBLOCK
   sta SCRATCH+7
-  jsr crlf
 
 printdirent         ; print the entry pointed to by SCRATCH+6
 
@@ -6004,42 +6042,57 @@ printdirent         ; print the entry pointed to by SCRATCH+6
   and #2
   bne nextdirent    ; skip hidden files
 
+  ;; print two spaces
+  lda #$20
+  jsr puta
+  jsr puta
+
   ;; print the file name (and then extension)
   ldy #0
 .(
 nextchar
   lda (SCRATCH+6),y
-  cmp #$20          ; if we hit a space, presume it's padding and skip to end
-  beq endofname
   jsr puta
   iny
   cpy #8            ; stop after eight characters
-  beq printext
-  bra nextchar
-endofname
-  ldy #8
+  bne nextchar
 .)
+
+  lda #"."
+  jsr puta
 
 printext            ; now print extension, if there is one
   lda (SCRATCH+6),y
-  cmp #$20          ; end at first space
-  beq endofext
-  pha
-  lda #"."          ; print a dot before first actual character
-  jsr puta
-  pla
   jsr puta
   iny
   lda (SCRATCH+6),y
-  cmp #20
-  beq endofext
   jsr puta
   iny
   lda (SCRATCH+6),y
-  cmp #20
-  beq endofext
   jsr puta
-endofext
+
+  lda #8
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
+
+  ldy #28           ; bytes 28-31 are the filesize in bytes
+  dex
+  dex
+  dex
+  dex
+  lda (SCRATCH+6),y
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH+6),y
+  sta stackbase+2,x
+  iny
+  lda (SCRATCH+6),y
+  sta stackbase+3,x
+  iny
+  lda (SCRATCH+6),y
+  sta stackbase+4,x
+  jsr rprint32s
   jsr crlf
 
 nextdirent
@@ -6059,6 +6112,114 @@ endofdir
 
   jmp next
 
+
+doshow
+  
+  ; sector = block - 2 * 64 + 545
+
+  ;; first, put the block number on the stack as a double
+  dex
+  dex
+  dex
+  dex
+  lda #$0E          ; should be coming from dirent
+  sta stackbase+1,x
+  stz stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+.(
+  ;; subtract 2
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  sbc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc #0
+  sta stackbase+4,x
+done
+.)
+
+  ;; shift left 6 times, to multiply by 64
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  rol stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  asl stackbase+1,x
+  rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
+
+  ;; add 545 ( = 512+33 = 2*256 + 33)
+  clc
+  lda stackbase+1,x
+  adc #33
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #2
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  ;; now we have a sector number. Load the sector at that number.
+  ;; SHOULD CACHE IT
+
+  jsr sdloadblock
+
+  ;; now type what's in the block, up to the file size
+  ;; BUG IMPLEMENT FILESIZE
+  ;; adding in carriage returns where needed
+
+  jsr crlf
+
+  ldy #0
+.(
+typechar
+  lda LBLOCK,y
+  jsr puta
+  cmp #10
+  bne nextchar
+  lda #13
+  jsr puta
+nextchar
+  iny
+  bne typechar
+.)
+
+  jsr crlf
+  jmp next
   
 
 
@@ -6638,3 +6799,4 @@ timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
 initializedmsg:  .byte " initialized ", $00
 diskerrormsg:    .byte " disk error", $0d, $0a, $00
+dirofmsg:        .byte "Directory of ", $00
