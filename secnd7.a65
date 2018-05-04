@@ -72,19 +72,20 @@ n;;; WORD points to the temporary string processing space
 ;;; 
 ;;;
 IP=$0050            ; and 0051
-RP=$0052            ; and 0053
-DT=$0054            ; and 0055
+RP=$0052            ; and 0053 (return stack pointer)
+DT=$0054            ; and 0055 (ptr to top of dictionary)
 XT=$0056            ; and 0057
 CODEVEC=$0058       ; and 0059
 TPTR=$005A
 TCNT=$005B
 DPTR=$005C          ; and 005D
-DP=$005E            ; and 005F
+DP=$005E            ; and 005F (dictionary pointer)
 STATUS=$0060        ; status word
-CWORD=$0061         ; and 0062
-PADPTR=$0063        ; and 0064
+CWORD=$0061         ; and 0062 (word currently being compiled)
+PADPTR=$0063        ; and 0064 (pointer to text area)
 SOURCE=$0065
 INBUFF=$0066        ; and 0067
+CURSEC=$0068        ; through $0071 (current loaded sector)
 RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
@@ -1167,12 +1168,12 @@ d120code
   .word docount
 
 d121entry
-  .byte 6
-  .byte "initsd"
+  .byte 5
+  .byte "mount"
 d121link
   .word d120entry
 d121code
-  .word doinitsd
+  .word domount
 
 d122entry
   .byte 6
@@ -5492,9 +5493,14 @@ setup6522
   sta VIA_DDRB
   rts
 
-;;; Forth word to execute the initialization code
-doinitsd
+;;; Forth word to initialize the SD card and read the boot block.
+domount
 .(
+  stz CURSEC
+  stz CURSEC+1
+  stz CURSEC+2
+  stz CURSEC+3
+
   ;; BUG should test for card present
   jsr resetsd
   jsr cmd0
@@ -5933,6 +5939,23 @@ done
 ;;; Load block specified by double on the stack, translating between
 ;;; number formats.
 sdloadblock
+  ;; check if this block is already loaded.
+  lda stackbase+1,x
+  cmp CURSEC
+  bne startload
+  lda stackbase+2,x
+  cmp CURSEC+1
+  bne startload
+  lda stackbase+3,x
+  cmp CURSEC+2
+  bne startload
+  lda stackbase+4,x
+  cmp CURSEC+3
+  bne startload
+  clc               ; make sure carry is clear (error signal)
+  rts               ; no need to do anything
+  
+startload
   jsr sendff
 
   ;; set cs to 0
@@ -5953,11 +5976,6 @@ sdloadblock
   lda #$95          ; crc, doesn't matter
   jsr sendbyte
 
-  inx               ; clean up the stack
-  inx
-  inx
-  inx
-
 .(
   jsr setidle
   jsr getresponse
@@ -5966,14 +5984,75 @@ sdloadblock
 
   jsr gettoken
   jsr getblock
+
+  ;; update cache of current sector number
+  lda stackbase+1,x
+  sta CURSEC
+  lda stackbase+2,x
+  sta CURSEC+1
+  lda stackbase+3,x
+  sta CURSEC+2
+  lda stackbase+4,x
+  sta CURSEC+3
+
+  inx               ; clean up the stack
+  inx
+  inx
+  inx
+
   clc               ; operation successful, so clear carry
   rts
 
 abortread
+  inx               ; clean up the stack
+  inx
+  inx
+  inx
+
   sec               ; set carry to signal failure
   rts
 .)
 
+
+sdloadnext
+  ;; copy cached block number onto the stack, adding one
+  dex
+  dex
+  dex
+  dex
+  clc
+  lda CURSEC
+  adc #1
+  sta stackbase+1,x
+  lda CURSEC+1
+  adc #0
+  sta stackbase+2,x
+  lda CURSEC+2
+  adc #0
+  sta stackbase+3,x
+  lda CURSEC+3
+  adc #0
+  sta stackbase+4,x
+
+  ;; now jump to regular block load code, skipping cache check
+  ;; (because we know it's different, clearly).
+  jmp startload
+
+
+;; load the root directory
+sdloadroot
+  dex
+  dex
+  dex
+  dex
+  lda #1
+  sta stackbase+1,x
+  lda #2
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+  jmp sdloadblock
+  
 
 ;;; List files from the root directory
 ;;;
@@ -6113,21 +6192,181 @@ endofdir
   jmp next
 
 
+;; NOTE this uses SCRATCH+4,5,12,13,14,15
 doshow
+
+  ;; first, load the directory
+  jsr sdloadroot
   
-  ; sector = block - 2 * 64 + 545
+  ;; pop a value from the stack and take it as an index into the directory
+  jsr pop16
+  lda stackaccess
+  sta SCRATCH+4
+  lda stackaccess+1
+  sta SCRATCH+5
+
+  ;; next -- instead of just starting with #14, start with a
+  ;; pointer into the directory. (before doing the directory
+  ;; search, which will be another thing again).
+  ;; grab cluster number but also file length.
+
+;  lda #5            ; TEMP this is the entry we're loading
+;  sta SCRATCH+4
+;  stz SCRATCH+5
+
+  ;; shift left to multiply by 32
+  asl SCRATCH+4
+  rol SCRATCH+5
+  asl SCRATCH+4
+  rol SCRATCH+5
+  asl SCRATCH+4
+  rol SCRATCH+5
+  asl SCRATCH+4
+  rol SCRATCH+5
+  asl SCRATCH+4
+  rol SCRATCH+5
+
+  ;; now add the base address of the directory
+  clc
+  lda SCRATCH+4
+  adc #<LBLOCK
+  sta SCRATCH+4
+  lda SCRATCH+5
+  adc #>LBLOCK
+  sta SCRATCH+5
+
+  ;; now, SCRATCH+4/5 points to directory entry
 
   ;; first, put the block number on the stack as a double
   dex
   dex
   dex
   dex
-  lda #$0E          ; should be coming from dirent
+  ldy #26
+  lda (SCRATCH+4),y
   sta stackbase+1,x
-  stz stackbase+2,x
+  iny
+  lda (SCRATCH+4),y
+  sta stackbase+2,x
   stz stackbase+3,x
   stz stackbase+4,x
 
+  ;; grab the file size and stash it
+  iny
+  lda (SCRATCH+4),y
+  sta SCRATCH+12
+  iny
+  lda (SCRATCH+4),y
+  sta SCRATCH+13
+  iny
+  lda (SCRATCH+4),y
+  sta SCRATCH+14
+  iny
+  lda (SCRATCH+4),y
+  sta SCRATCH+15
+
+  ;; turn block count on stack into sector count, and load the sector
+  jsr cltosector
+  jsr sdloadblock
+
+  ;; now type what's in the block, up to the file size. we print in
+  ;; blocks of 256 bytes, but we do so twice because the buffer is
+  ;; actually 512 bytes.
+  ;; BUG we ignore anything over 32k for the file size
+
+  jsr crlf
+
+typeblock
+.(
+  ;; by default, print 256 characters
+  lda #255
+  sta SCRATCH
+  ;; are there fewer than 256 characters to process?
+  lda SCRATCH+13
+  beq under256
+  dec SCRATCH+13    ; we will print 256 characters, take 256 off the count
+  bra first256
+under256
+  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
+  beq endshow       ; if it's zero, we're done
+  dec               ; range from 0 rather than 1
+  sta SCRATCH
+  stz SCRATCH+12
+.)
+
+first256
+  ldy #0
+.(
+typechar
+  lda LBLOCK,y
+  jsr puta
+  cmp #10           ; in the case of an LF, add a CR too
+  bne nextchar
+  lda #13
+  jsr puta
+nextchar
+  cpy SCRATCH
+  beq done
+  iny
+  bra typechar
+done
+.)
+
+  ;; now consider the second 256 characters in the sector
+.(
+  ;; by default, print 256 characters
+  lda #255
+  sta SCRATCH
+  ;; are there fewer than 256 characters to process?
+  lda SCRATCH+13
+  beq under256
+  dec SCRATCH+13    ; update count for the end of the print
+  bra second256
+under256
+  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
+  beq endshow       ; if it's zero, we're done
+  dec               ; re-range to zero-index
+  sta SCRATCH
+  stz SCRATCH+12    ; after which, there will be none left
+.)
+
+second256
+  ldy #0
+.(
+typechar
+  lda HBLOCK,y
+  jsr puta
+  cmp #10           ; in the case of an LF, add a CR too
+  bne nextchar
+  lda #13
+  jsr puta
+nextchar
+  cpy SCRATCH
+  beq done
+  iny
+  bra typechar
+done
+.)
+
+  ;; if there is more data, load the next block and repeat
+  lda SCRATCH+13
+  bne nextblock
+  lda SCRATCH+12
+  beq endshow
+
+nextblock
+  jsr sdloadnext
+  jmp typeblock
+
+endshow
+  jsr crlf
+  jmp next
+  
+
+;; convert a cluster address into a sector address
+;; calculation is cluster-2 * sectors/cluster + resv + len FATs + len root
+;; generally, cluster-2 * 64 + 545
+cltosector
 .(
   ;; subtract 2
   sec
@@ -6193,34 +6432,8 @@ done
   adc #0
   sta stackbase+4,x
 
-  ;; now we have a sector number. Load the sector at that number.
-  ;; SHOULD CACHE IT
+  rts
 
-  jsr sdloadblock
-
-  ;; now type what's in the block, up to the file size
-  ;; BUG IMPLEMENT FILESIZE
-  ;; adding in carriage returns where needed
-
-  jsr crlf
-
-  ldy #0
-.(
-typechar
-  lda LBLOCK,y
-  jsr puta
-  cmp #10
-  bne nextchar
-  lda #13
-  jsr puta
-nextchar
-  iny
-  bne typechar
-.)
-
-  jsr crlf
-  jmp next
-  
 
 
 ;;; lowest levels -- send a byte, receive a byte...
