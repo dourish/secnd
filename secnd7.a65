@@ -5939,6 +5939,7 @@ done
 ;;; Load block specified by double on the stack, translating between
 ;;; number formats.
 sdloadblock
+
   ;; check if this block is already loaded.
   lda stackbase+1,x
   cmp CURSEC
@@ -5953,7 +5954,7 @@ sdloadblock
   cmp CURSEC+3
   bne startload
   clc               ; make sure carry is clear (error signal)
-  rts               ; no need to do anything
+  bra finishload    ; jump to end, clean up stack
   
 startload
   jsr sendff
@@ -5976,7 +5977,6 @@ startload
   lda #$95          ; crc, doesn't matter
   jsr sendbyte
 
-.(
   jsr setidle
   jsr getresponse
   cmp #0
@@ -5995,6 +5995,7 @@ startload
   lda stackbase+4,x
   sta CURSEC+3
 
+finishload
   inx               ; clean up the stack
   inx
   inx
@@ -6011,7 +6012,6 @@ abortread
 
   sec               ; set carry to signal failure
   rts
-.)
 
 
 sdloadnext
@@ -6045,7 +6045,7 @@ sdloadroot
   dex
   dex
   dex
-  lda #1
+  lda #1            ; sector 513 == 0x00000201
   sta stackbase+1,x
   lda #2
   sta stackbase+2,x
@@ -6204,11 +6204,6 @@ doshow
   sta SCRATCH+4
   lda stackaccess+1
   sta SCRATCH+5
-
-  ;; next -- instead of just starting with #14, start with a
-  ;; pointer into the directory. (before doing the directory
-  ;; search, which will be another thing again).
-  ;; grab cluster number but also file length.
 
 ;  lda #5            ; TEMP this is the entry we're loading
 ;  sta SCRATCH+4
