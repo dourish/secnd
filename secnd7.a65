@@ -67,8 +67,9 @@ SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 ;;; CWORD holds a pointer to the word currently being compiled
 ;;; SOURCE indicates where input is coming from (0 for terminal)
 ;;; INPUT points to the input buffer
-n;;; WORD points to the temporary string processing space
+;;; WORD points to the temporary string processing space
 ;;; INBUFF points to the current non-terminal input area
+;;; IOSPACE is the boundary into I/O buffer space
 ;;; 
 ;;;
 IP=$0050            ; and 0051
@@ -95,6 +96,7 @@ XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
+IOSPACE=$6000       ; start of buffer space
 
 MBR=$0200           ; cache SD card master boot record in unused stack space
 MBR_NFATS=$0210     ; address of FAT count within cache
@@ -1124,6 +1126,7 @@ d115entry
 d115link
   .word d114entry
 d115code
+doloadcode
   .word doload
 
 d116entry
@@ -1273,7 +1276,6 @@ d132link
 d132code
   .word doshow
 
-dtop
 d133entry
   .byte 7
   .byte "flookup"
@@ -1282,7 +1284,31 @@ d133link
 d133code
   .word doflookup
 
+d134entry
+  .byte 5
+  .byte "fload"
+d134link
+  .word d133entry
+d134code
+dofloadcode
+  .word dofload
 
+dtop
+d135entry
+  .byte 7
+  .byte "include"
+d135link
+  .word d134entry
+d135code
+  .word dolist
+d135param
+  .word dolitcode
+  .word IOSPACE
+  .word dofloadcode
+  .word dolitcode
+  .word IOSPACE
+  .word doloadcode
+  .word exitcode
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -4063,6 +4089,7 @@ dotuck
 ;;; address underneath; the monitor looks for them the other way around.
 ;;; So to a swap before calling the routine.
 dodump
+  jsr crlf
   jsr swap16
   jsr DUMP
   jmp next
@@ -6226,10 +6253,12 @@ doshow
   jsr readnext      ; get next word and put it into input buffer
   jsr matchname     ; see what we get
 
+.(
   bcc continue
   jmp abortnofile
 
 continue
+.)
   ;; now, SCRATCH+6/7 points to directory entry
 
   ;; first, grab the block number and push onto stack as a double
@@ -6355,6 +6384,160 @@ nextblock
 
 endshow
   jsr crlf
+  jmp next
+
+
+;; NOTE this uses SCRATCH+4,5,10,11,12,13,14,15. getblock uses 8,9.
+dofload
+
+  jsr readnext      ; get next word and put it into input buffer
+  jsr matchname     ; see what we get
+
+.(
+  bcc continue
+  jmp abortnofile
+
+continue
+.)
+  ;; now, SCRATCH+6/7 points to directory entry
+
+  ;; first, grab the block number and push onto stack as a double
+  dex
+  dex
+  dex
+  dex
+  ldy #26
+  lda (SCRATCH+6),y ; LSB
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH+6),y ; MSB
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; grab the file size and stash it
+  iny
+  lda (SCRATCH+6),y
+  sta SCRATCH+12
+  iny
+  lda (SCRATCH+6),y
+  sta SCRATCH+13
+  iny
+  lda (SCRATCH+6),y
+  sta SCRATCH+14
+  iny
+  lda (SCRATCH+6),y
+  sta SCRATCH+15
+
+  ;; turn block count on stack into sector count, and load the sector
+  jsr cltosector
+  jsr sdloadblock
+
+  ;; now load what's in the block, up to the file size. we load in
+  ;; blocks of 256 bytes, but we do so twice because the buffer is
+  ;; actually 512 bytes.
+  ;; BUG we ignore anything over 32k for the file size
+  lda #<IOSPACE
+  sta SCRATCH+10
+  lda #>IOSPACE
+  sta SCRATCH+11
+
+loadblock
+.(
+  ;; by default, load 256 characters
+  ldy #255
+  sty SCRATCH
+  ;; are there fewer than 256 characters left to process?
+  lda SCRATCH+13
+  beq under256
+  dec SCRATCH+13    ; we will load 256 characters, take 256 off the count
+  bra lfirst256
+under256
+  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
+  beq endfload      ; if it's zero, we're done
+  dec               ; range from 0 rather than 1
+  sta SCRATCH
+  tay
+  stz SCRATCH+12
+.)
+
+lfirst256
+.(
+loop
+  lda LBLOCK,y
+  sta (SCRATCH+10),y
+  dey
+  bne loop
+  lda LBLOCK,y      ; and the last one by hand
+  sta (SCRATCH+10),y
+.)
+
+.(
+  clc
+  lda SCRATCH+10
+  adc SCRATCH
+  adc #1
+  sta SCRATCH+10
+  bcc done
+  inc SCRATCH+11
+done
+.)
+
+  
+  ;; now consider the second 256 characters in the sector
+.(
+  ;; are there fewer than 256 characters to process?
+  lda SCRATCH+13
+  beq under256
+  dec SCRATCH+13    ; update count for the end of the load
+  ldy #255          ; 256 characters to be copied
+  sty SCRATCH       ; y is the index but keep a copy
+  bra lsecond256
+under256
+  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
+  beq endfload      ; if it's zero, we're done
+  dec               ; re-range to zero-index
+  sta SCRATCH
+  tay
+  stz SCRATCH+12    ; after which, there will be none left
+.)
+
+lsecond256
+.(
+loop
+  lda HBLOCK,y
+  sta (SCRATCH+10),y
+  dey
+  bne loop
+  lda HBLOCK,y      ; last one by hand
+  sta (SCRATCH+10),y
+.)
+
+.(
+  clc
+  lda SCRATCH+10
+  adc SCRATCH
+  adc #1
+  sta SCRATCH+10
+  bcc done
+  inc SCRATCH+11
+done
+.)
+
+  ;; if there is more data, load the next block and repeat
+  lda SCRATCH+13
+  bne loadnextblock
+  lda SCRATCH+12
+  beq endfload
+
+loadnextblock
+  jsr sdloadnext
+  jmp loadblock
+
+endfload
+  ; null-terminate the load
+  lda #0
+  sta (SCRATCH+10)
   jmp next
   
 
@@ -6488,6 +6671,12 @@ loop
   lda WORD,y
   cmp #"."
   beq endname
+  cmp #"a"
+  bcc copy
+  cmp #"{"          ; first character after "z"
+  bcs copy
+  and #%11011111    ; convert lower to upper
+copy  
   sta (SCRATCH)
   inc SCRATCH
   cpy #7
@@ -6507,6 +6696,12 @@ endname
 extloop
   lda WORD,y
   beq done
+  cmp #"a"
+  bcc copy
+  cmp #"{"          ; first character after "z"
+  bcs copy
+  and #%11011111    ; convert lower to upper
+copy  
   sta (SCRATCH)
   inc SCRATCH
   iny
