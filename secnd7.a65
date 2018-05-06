@@ -6236,6 +6236,22 @@ nextdirent
 bcc done
   inc SCRATCH+7
 done
+
+  ;; check if we have run off the end of the input buffer space
+  ;; (by comparing to the MSB of PAD, which is the space right after).
+  ;; if so, load the next block.
+  ;; BUG there are 32 blocks allocated to the root directory. should
+  ;; count to make sure that we don't exceed that. but I'm presuming
+  ;; for the moment that we'll hit a null entry before then.
+  lda SCRATCH+7
+  cmp #>PAD
+  bne endnext       ; still fine, continue
+  jsr sdloadnext
+  lda #<LBLOCK      ; reset pointer to the start of the buffer
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+endnext
 .)
   bra printdirent
 
@@ -6714,19 +6730,20 @@ done
   lda #>LBLOCK
   sta SCRATCH+7
 
-  lda (SCRATCH+6)
+matchloop
+  lda (SCRATCH+6)   ; null entry (ie, end of directory)?
   beq noentry
 
   ;; match a single directory entry
 matchentry
   ldy #0
-matchloop
+nameloop
   lda (SCRATCH+6),y
   cmp (PADPTR),y
   bne matchfail
   iny
   cpy #11
-  bne matchloop
+  bne nameloop
 success
   clc
   rts
@@ -6734,22 +6751,20 @@ success
 matchfail
   ;; get next directory entry
   clc
-  lda SCRATCH+6
-  adc #32
+  lda SCRATCH+6     ; bump pointer
+  adc #32           ; entries are 32 bytes long
   sta SCRATCH+6
   lda SCRATCH+7
   adc #0
   sta SCRATCH+7
-
-  ;; if this entry is null, then quit
-  lda (SCRATCH+6)
-  beq noentry
-
-  ; don't worry about this yet
-  ;cmp #>HBLOCK+1
-  ;beq nextblock 
-
-  bra matchentry
+  cmp #>PAD         ; run off the end of the buffer?
+  bne matchloop
+  jsr sdloadnext    ; load next block
+  lda #<LBLOCK      ; reset the directory pointer to new block
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+  bra matchloop     ; loop to test this one
 .)
 
 noentry
