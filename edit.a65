@@ -1,0 +1,579 @@
+;;;
+;;; SCREEN EDITOR
+;;;
+;;; Basic screen editor for text, using EMACS-like commands.
+;;; Text is laid out in 20 rows of 64 characters, mapped into
+;;; memory with nulls filling empty space.
+;;;
+;;; I stupidly managed to delete the text of my own code, and so
+;;; this is currently being retreived from a disassembled version
+;;; of an executable snapshot.
+;;;
+
+
+temp=$00A0
+row=$00A1
+col=$00A2
+rowbase=$00A3 ; and 00A4
+count=$00A5
+upper=$00A6 ; and 00A7
+lower=$00A8 ; and 00A9
+jmpvec=$00B0 ; and 00B1
+
+TEXTBASE=$6000
+TEXTSIZE=1280    ; 64 * 200
+NROWS=20
+MAXROW=NROWS-1
+NCOLS=64
+MAXCOL=NCOLS-1
+
+
+* = $0300
+
+        jmp     begin
+
+table
+
+  .word tostart     ; a
+  .word back        ; b
+  .word undefined   ; c
+  .word delfwd      ; d
+  .word toend       ; e
+  .word forw        ; f
+  .word undefined   ; g
+  .word delback     ; h
+  .word undefined   ; i
+  .word undefined   ; j
+  .word undefined   ; k
+  .word undefined   ; l
+  .word newline     ; m
+  .word next        ; n
+  .word undefined   ; o
+  .word prev        ; p
+  .word undefined   ; q
+  .word undefined   ; r
+  .word undefined   ; s
+  .word undefined   ; t
+  .word undefined   ; u
+  .word undefined   ; v
+  .word undefined   ; w
+  .word exit        ; x
+  .word undefined   ; y
+  .word undefined   ; z
+
+
+begin
+        ;; basic setup
+        lda $FF
+        txs
+        cld
+        sei
+
+        ;; set up ACIA
+        lda     #$0B
+        sta     $8802
+        lda     #$1F
+        sta     $8803
+
+        lda     #$00      ; initialize rowbase
+        sta     rowbase
+        lda     #$60
+        sta     rowbase+1
+
+.(
+        ;; this stuff is zeroing out the text block
+        lda     #MAXROW ; or NROWS? #$14
+        sta     count
+rowloop
+        lda     #$00
+        ldy     #MAXCOL ; #$3F
+zeroloop
+        sta     (rowbase),y
+        dey
+        bne     zeroloop
+
+.(
+        clc
+        lda     rowbase
+        adc     #$40
+        sta     rowbase
+        bcc     doneadd
+        inc     rowbase+1
+doneadd
+.)
+        lda     $A5
+        dec
+        sta     $A5
+        bne     rowloop
+.)
+        lda     #$00     ; set it back again
+        sta     rowbase
+        lda     #$60
+        sta     rowbase+1
+        lda     #$03  ; is this the pointer into the table?
+        sta     $B1
+
+	stz     row
+        stz     col
+        jsr     cls
+        jsr     home
+
+editloop
+
+        jsr     readchar ; L0607  
+        cmp     #$1B   ; if it's less than 27, it's a control code
+        bcs     notcmd
+        dec              ;.byte   $3A
+        asl              ;a
+        tax
+        lda     table,x    ; $0303,x
+        sta     jmpvec
+        lda     table+1,x  ; $0304,x
+        sta     jmpvec+1
+        jmp     (jmpvec)
+
+        bra   editloop   ; shouldn't need this but just for safety
+
+notcmd
+        jsr   insert  ;  L04CF
+        bra   editloop
+        brk
+
+;; for small integers (<100), convert to decimal and output
+todecimal
+.(
+        ldy     #$30
+        sty     $A0  ; temp
+convloop
+        cmp     #$0A
+        bmi     donedigit
+        sec
+        sbc     #$0A
+        inc     $A0
+        bne     convloop
+donedigit
+        tay
+        lda     $A0
+        jsr     puta
+        tya
+        clc
+        adc     #$30
+        jsr     puta
+        rts
+.)
+
+puta
+.(
+        pha
+rdyloop
+        lda     $8801
+        and     #$10
+        beq     rdyloop
+        pla
+        sta     $8800
+        rts
+.)
+
+cls
+        lda     #$1B  ; esc
+        jsr     puta
+        lda     #$5B  ; "["
+        jsr     puta
+        lda     #$32  ; "2"
+        jsr     puta
+        lda     #$4A  ; "J"
+        jsr     puta
+        rts
+
+home
+        lda     #$1B  ; esc
+        jsr     puta
+        lda     #$5B  ; [
+        jsr     puta
+        lda     #$48  ; H
+        jsr     puta
+        rts
+
+clrtoeol
+        lda     #$1B
+        jsr     puta
+        lda     #$5B
+        jsr     puta
+        lda     #$30
+        jsr     puta
+        lda     #$4B ; K
+        jsr     puta
+        rts
+
+clrtoend
+        lda     #$1B  ; ESC
+        jsr     puta
+        lda     #$5B  ; [
+        jsr     puta
+        lda     #$30  ; 0
+        jsr     puta
+        lda     #$4A ; H
+        jsr     puta
+        rts
+
+next
+.(
+        lda     row
+        cmp     #MAXROW ; #$13
+        beq     donothing
+        inc     row
+.(
+        clc
+        lda     rowbase
+        adc     #NCOLS ; #$40
+        sta     rowbase
+        bcc     doneadd
+        inc     rowbase+1
+doneadd
+.)
+       jsr     moveto
+donothing
+       jmp     editloop
+.)
+
+prev
+.(
+        lda     row
+        beq     donothing
+        dec     row
+        sec
+        lda     rowbase
+        sbc     #NCOLS ; #$40
+        sta     rowbase
+        lda     rowbase+1
+        sbc     #$00
+        sta     rowbase+1
+        jsr     moveto
+donothing
+       jmp     editloop
+.)
+
+back
+.(
+        lda     col
+        beq     donothing
+        dec     col
+        jsr     moveto
+donothing
+       jmp     editloop
+.)
+
+forw
+.(
+        lda     col
+        cmp     #MAXCOL ; #$3F
+        beq     donothing
+        inc     col
+        jsr     moveto
+donothing
+       jmp     editloop
+.)
+
+        ;.byte   $64 ; STZ zero page so this STZ xxx, JSR something
+        ; LDX imm is $A2, so this is STZ $A2, JSR xxxx
+        ; is this start-of-line? STZ col, JSR Moveto, 
+        ;ldx     #$20
+        ;sty     $04
+tostart
+	stz col
+	jsr moveto
+        jmp     editloop
+
+toend
+.(
+        ldy     #$00
+endloop
+        lda     (rowbase),y
+        beq     atend
+        iny
+        cpy     #MAXCOL ;#$3F
+        beq     atend
+        bra     endloop
+atend   sty     col
+        jsr     moveto
+        jmp     editloop
+.)
+
+moveto
+        lda     #$1B ; ESC
+        jsr     puta
+        lda     #$5B ; [
+        jsr     puta
+        lda     row  ; row
+        .byte   $1A
+        jsr     todecimal; L03A2
+        lda     #$3B  ; semic
+        jsr     puta
+        lda     col  ; col
+        .byte   $1A
+        jsr     todecimal; L03A2
+        lda     #$48  ; H
+        jsr     puta
+        rts
+
+delfwd
+.(
+        ldy     col
+delloop
+        iny
+        lda     (rowbase),y
+        dey
+        sta     (rowbase),y
+        jsr     puta
+        beq     done
+        iny
+        bra   delloop
+done
+        lda     #$20
+        jsr     puta
+        jsr     moveto
+        jmp     editloop
+.)
+
+delback
+.(
+        lda     col
+        beq     donothing
+        dec     col
+        jsr     moveto
+        jmp     delfwd
+donothing
+        jmp     editloop
+.)
+
+insert
+        pha
+        ldy     col
+        lda     (rowbase),y
+        bne     notatend
+inschar
+        pla
+        sta     (rowbase),y
+        jsr     puta
+        inc     col
+        jsr     moveto
+        rts
+
+notatend
+        phy             ; .byte   $5A
+        inc     col
+        jsr     moveto
+        dec     col
+        ply             ;.byte   $7A
+        ;; move the rest of the line right by one character
+        lda     (rowbase),y
+insloop
+        iny
+        pha
+        lda     (rowbase),y
+        tax
+        pla
+        sta     (rowbase),y
+        jsr     puta
+        txa
+        bne     insloop
+        iny
+        sta     (rowbase),y
+        jsr     moveto
+        ldy     col
+        bra inschar
+        lda row
+        cmp #MAXROW
+        bne     newline ; LFEF4
+        jmp     editloop
+
+;LFEF4
+newline
+        ldy     col
+        lda     (rowbase),y
+        beq     atend; LFEFD
+        jmp     breakline; L05F2
+
+;LFEFD
+atend
+.(
+        clc
+        lda     rowbase
+        adc     #$40
+        sta     rowbase
+        bcc     doneadd
+        inc     rowbase+1
+doneadd        
+.)
+        lda (rowbase)    ; is this next line empty?
+        bne     movelines
+        inc     row
+        stz col
+        jsr moveto
+        jmp     editloop
+
+movelines
+;LFF16
+        ;; find the end of the text area by adding textsize to textbase
+        clc
+        lda #<TEXTBASE
+        adc #<TEXTSIZE
+        sta     upper
+        lda     #>TEXTBASE
+        adc     #>TEXTSIZE
+        sta     upper+1
+
+        ;; subtract one line length to get the last line in area
+        sec
+        lda     upper
+        sbc     #$40
+        sta     upper
+        lda     upper+1
+        sbc     #$00
+        sta     upper+1
+
+        ;; is that the row we're on now?
+        lda     upper
+        cmp     rowbase
+        bne     continue; LFF3F
+        lda     upper+1
+        cmp     rowbase+1
+        bne     continue ; LFF3F
+        jmp     finish ; L05EF yes so we are done, i think
+
+continue
+;LFF3F
+        ;; substract one more line length and store in lower
+        sec
+        lda     upper
+        sbc     #$40
+        sta     lower
+        lda     upper+1
+        sbc     #$00
+        sta     lower+1
+
+        ;; at this point, we have two pointers, lower and upper,
+        ;; which point to two adjacent lines at the end of the buffer.
+        ;; we want to reapeatedly copy the contents of lower into
+        ;; upper. We do this backwards from the end of the buffer
+        ;; so that we are preserving text as it ripples down.
+linecopy
+;LFF4C
+        ldy     #$3F
+charcopy
+;LFF4E
+        lda     (lower),y
+        sta     (upper),y
+        dey
+        bne     charcopy
+        lda (lower)   ; copy the last character
+        sta (upper)
+        sec
+        lda     lower
+        sta     upper
+        sbc     #$40
+        sta     lower
+        lda     lower+1
+        sta     upper+1
+        sbc     #$00
+        sta     lower+1
+        lda     upper
+        cmp     rowbase
+        bne     linecopy ; LFF4C
+        lda     upper+1
+        cmp     rowbase+1
+        bne     linecopy ; LFF4C
+        inc     row
+        stz     col
+        jsr moveto
+        ldy     #$3F
+spaceloop
+;LFF7F
+        lda     #$20
+        jsr     puta
+        lda     #$00
+        sta     (rowbase),y
+        dey
+        bne     spaceloop
+        sta     (rowbase),y  ; do the last byte
+
+        clc
+        lda     rowbase
+        adc     #$40
+        sta     lower
+        lda     rowbase+1
+        adc     #$00
+        sta     lower+1
+        stz col
+        lda row
+        pha
+        inc row
+        jsr moveto
+.(
+rowloop
+        ldy     #$00
+charloop
+        lda     (lower),y
+        beq     endofline
+        jsr     puta
+        cpy     #$3F
+        beq     endofline
+        iny
+        bra   charloop
+endofline
+;LFFB4
+        jsr     clrtoeol ; L03F1
+        lda     row
+        cmp     #$13
+        beq     done; LFFCF
+        inc     row
+        jsr     moveto
+.(
+        clc
+        lda     lower
+        adc     #$40
+        sta     lower
+        bcc     doneadd
+        inc     lower+1
+doneadd
+;LFFCD
+.)
+        bra   rowloop
+.)
+done
+;LFFCF
+        pla
+        sta     row
+        jsr     moveto
+finish
+        jmp     editloop
+
+breakline
+        jmp     editloop
+
+exit
+        lda     #$15
+        sta     row
+        lda     #$00
+        sta     col
+        jsr     moveto
+        rts
+
+;; what is this for?
+;  oh! this was "testcode" for T, and it just printed a cleartoend
+testcode
+        jsr     clrtoend
+        jmp     editloop
+
+readchar
+        lda     $8801
+        and     #$08
+        beq     readchar
+        lda     $8800
+        rts
+
+undefined
+        lda     #$07
+        jsr     puta
+        jmp     editloop
+
