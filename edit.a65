@@ -44,7 +44,7 @@ table
   .word delback     ; h
   .word undefined   ; i
   .word undefined   ; j
-  .word undefined   ; k
+  .word delline     ; k
   .word undefined   ; l
   .word newline     ; m
   .word next        ; n
@@ -53,7 +53,7 @@ table
   .word undefined   ; q
   .word undefined   ; r
   .word undefined   ; s
-  .word undefined   ; t
+  .word testcode    ; t
   .word undefined   ; u
   .word undefined   ; v
   .word undefined   ; w
@@ -63,76 +63,75 @@ table
 
 
 begin
-        ;; basic setup
-        lda $FF
-        txs
-        cld
-        sei
+  ;; basic setup
+  lda $FF
+  txs
+  cld
+  sei
 
-        ;; set up ACIA
-        lda     #$0B
-        sta     $8802
-        lda     #$1F
-        sta     $8803
+  ;; set up ACIA
+  lda     #$0B
+  sta     $8802
+  lda     #$1F
+  sta     $8803
 
-        lda     #$00      ; initialize rowbase
-        sta     rowbase
-        lda     #$60
-        sta     rowbase+1
+  lda     #$00      ; initialize rowbase
+  sta     rowbase
+  lda     #$60
+  sta     rowbase+1
 
 .(
-        ;; this stuff is zeroing out the text block
-        lda     #MAXROW ; or NROWS? #$14
-        sta     count
+  ;; this stuff is zeroing out the text block
+  lda     #MAXROW ; or NROWS? #$14
+  sta     count
 rowloop
-        lda     #$00
-        ldy     #MAXCOL ; #$3F
+  lda     #$00
+  ldy     #MAXCOL ; #$3F
 zeroloop
-        sta     (rowbase),y
-        dey
-        bne     zeroloop
+  sta     (rowbase),y
+  dey
+  bne     zeroloop
 
 .(
-        clc
-        lda     rowbase
-        adc     #$40
-        sta     rowbase
-        bcc     doneadd
-        inc     rowbase+1
+  clc
+  lda     rowbase
+  adc     #$40
+  sta     rowbase
+  bcc     doneadd
+  inc     rowbase+1
 doneadd
 .)
-        lda     $A5
-        dec
-        sta     $A5
-        bne     rowloop
+  lda count
+  dec
+  sta count
+  bne rowloop
 .)
-        lda     #$00     ; set it back again
-        sta     rowbase
-        lda     #$60
-        sta     rowbase+1
-        lda     #$03  ; is this the pointer into the table?
-        sta     $B1
-
-	stz     row
-        stz     col
-        jsr     cls
-        jsr     home
+  lda #$00          ; set it back again
+  sta rowbase
+  lda #$60
+  sta rowbase+1
+  lda #$03          ; upper byte of jump table
+  sta jmpvec+1
+  stz row
+  stz col
+  jsr cls
+  jsr home
 
 editloop
 
-        jsr     readchar ; L0607  
-        cmp     #$1B   ; if it's less than 27, it's a control code
-        bcs     notcmd
-        dec              ;.byte   $3A
-        asl              ;a
-        tax
-        lda     table,x    ; $0303,x
-        sta     jmpvec
-        lda     table+1,x  ; $0304,x
-        sta     jmpvec+1
-        jmp     (jmpvec)
+  jsr readchar
+  cmp #$1B   ; if it's less than 27, it's a control code
+  bcs notcmd
+  dec
+  asl
+  tax
+  lda table,x
+  sta jmpvec
+  lda table+1,x
+  sta jmpvec+1
+  jmp (jmpvec)
 
-        bra   editloop   ; shouldn't need this but just for safety
+  bra   editloop   ; shouldn't need this but just for safety
 
 notcmd
         jsr   insert  ;  L04CF
@@ -318,21 +317,21 @@ moveto
 
 delfwd
 .(
-        ldy     col
+  ldy     col
 delloop
-        iny
-        lda     (rowbase),y
-        dey
-        sta     (rowbase),y
-        jsr     puta
-        beq     done
-        iny
-        bra   delloop
+  iny
+  lda     (rowbase),y
+  dey
+  sta     (rowbase),y
+  jsr     puta
+  beq     done
+  iny
+  bra   delloop
 done
-        lda     #$20
-        jsr     puta
-        jsr     moveto
-        jmp     editloop
+  lda     #$20
+  jsr     puta
+  jsr     moveto
+  jmp     editloop
 .)
 
 delback
@@ -368,212 +367,370 @@ notatend
         ;; move the rest of the line right by one character
         lda     (rowbase),y
 insloop
-        iny
-        pha
-        lda     (rowbase),y
-        tax
-        pla
-        sta     (rowbase),y
-        jsr     puta
-        txa
-        bne     insloop
-        iny
-        sta     (rowbase),y
-        jsr     moveto
-        ldy     col
-        bra inschar
-        lda row
-        cmp #MAXROW
-        bne     newline ; LFEF4
-        jmp     editloop
+  iny
+  pha
+  lda (rowbase),y
+  tax
+  pla
+  sta (rowbase),y
+  jsr puta
+  txa
+  bne insloop
+  iny
+  sta (rowbase),y
+  jsr moveto
+  ldy col
+  bra inschar
+  lda row
+  cmp #MAXROW
+  bne newline
+  jmp editloop
 
-;LFEF4
 newline
-        ldy     col
-        lda     (rowbase),y
-        beq     atend; LFEFD
-        jmp     breakline; L05F2
+  ldy col           ; are we at the end of a line?
+  lda (rowbase),y
+  beq atend         ; if yes
+  jmp  breakline    ; if no
 
-;LFEFD
 atend
 .(
-        clc
-        lda     rowbase
-        adc     #$40
-        sta     rowbase
-        bcc     doneadd
-        inc     rowbase+1
+  clc               ; reset rowbase to the new line
+  lda rowbase
+  adc #NCOLS
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
 doneadd        
 .)
-        lda (rowbase)    ; is this next line empty?
-        bne     movelines
-        inc     row
-        stz col
-        jsr moveto
-        jmp     editloop
+  lda (rowbase)      ; is this next line empty?
+  bne movelines      ; no, so move lines to insert a new one
+  inc row            ; yes, so move to it
+  stz col
+  jsr moveto
+  jmp editloop
 
 movelines
-;LFF16
-        ;; find the end of the text area by adding textsize to textbase
-        clc
-        lda #<TEXTBASE
-        adc #<TEXTSIZE
-        sta     upper
-        lda     #>TEXTBASE
-        adc     #>TEXTSIZE
-        sta     upper+1
+  ;; move the rest of the text down by one line
+  jsr rippledown
 
-        ;; subtract one line length to get the last line in area
-        sec
-        lda     upper
-        sbc     #$40
-        sta     upper
-        lda     upper+1
-        sbc     #$00
-        sta     upper+1
+  ;; clear data out of this line
+  ldy #MAXCOL
+  lda #0
+.(
+clearloop
+  sta (rowbase),y
+  dey
+  bne clearloop
+  sta (rowbase)
+.)
 
-        ;; is that the row we're on now?
-        lda     upper
-        cmp     rowbase
-        bne     continue; LFF3F
-        lda     upper+1
-        cmp     rowbase+1
-        bne     continue ; LFF3F
-        jmp     finish ; L05EF yes so we are done, i think
+  ;; now that the data is in the right place, repaint the screen
+  ;; first, clear everything below the current row
+  jsr clrtoend
+  inc row           ; we haven't done that yet
+  jsr moveto
+
+  ;; stash the row count
+  lda row
+  pha
+
+  ;; now, paint rows that remain
+  clc
+  lda rowbase
+  adc #NCOLS
+  sta lower
+  lda rowbase+1
+  adc #$00
+  sta lower+1
+  stz col
+
+paintnext
+  lda row
+  inc
+  cmp #MAXROW
+  beq donerepaint
+  sta row
+  stz col
+  jsr moveto
+  jsr paintrow
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  bcc paintnext
+  inc lower+1
+  bra paintnext
+
+donerepaint
+  pla
+  sta row
+  jsr moveto
+
+finish
+  jmp editloop
+
+breakline ;; TO BE IMPLEMENTED
+    jmp editloop
+
+
+;; output the text for one row, pointed to by lower. do it
+;; directly for faster output without the subroutine call.
+paintrow
+.(
+  phy
+  ldy #0
+rdyloop
+  lda $8801
+  and #$10
+  beq rdyloop
+  lda (lower),y
+  beq done
+  sta $8800
+  iny
+  cpy #MAXCOL
+  beq done
+  bra rdyloop
+done
+  ply
+  rts
+.)
+
+;; clear below and print from current row to the bottom of
+;; of the screen.
+paintdown
+.(
+  lda rowbase
+  sta lower
+  lda rowbase+1
+  sta lower+1
+  lda row
+  pha               ; stash the row count
+  lda col
+  pha               ; stash the column count
+  stz col
+paintloop
+  jsr moveto
+  jsr clrtoend
+  jsr paintrow
+  lda row
+  inc
+  cmp #MAXROW
+  beq endpaint
+  sta row
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  lda lower+1
+  adc #0
+  sta lower+1
+  bra paintloop
+endpaint
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  rts
+.)
+
+;;; move lines down to open up a space. starts from the last line and
+;;; works its way down to the current row (rowbase).
+rippledown
+.(
+  ;; find the end of the text area by adding textsize to textbase
+  clc
+  lda #<TEXTBASE
+  adc #<TEXTSIZE
+  sta upper
+  lda #>TEXTBASE
+  adc #>TEXTSIZE
+  sta upper+1
+
+  ;; subtract one line length to get the last line in area
+  sec
+  lda upper
+  sbc #NCOLS
+  sta upper
+  lda upper+1
+  sbc #$00
+  sta upper+1
+
+  ;; is that the row we're on now?
+  lda upper
+  cmp rowbase
+  bne continue
+  lda upper+1
+  cmp rowbase+1
+  bne continue
+  jmp finish        ;  yes so we are done
 
 continue
-;LFF3F
-        ;; substract one more line length and store in lower
-        sec
-        lda     upper
-        sbc     #$40
-        sta     lower
-        lda     upper+1
-        sbc     #$00
-        sta     lower+1
+  ;; substract one more line length and store in lower
+  sec
+  lda upper
+  sbc #$40
+  sta lower
+  lda upper+1
+  sbc #$00
+  sta lower+1
 
-        ;; at this point, we have two pointers, lower and upper,
-        ;; which point to two adjacent lines at the end of the buffer.
-        ;; we want to reapeatedly copy the contents of lower into
-        ;; upper. We do this backwards from the end of the buffer
-        ;; so that we are preserving text as it ripples down.
+  ;; at this point, we have two pointers, lower and upper,
+  ;; which point to two adjacent lines at the end of the buffer.
+  ;; we want to reapeatedly copy the contents of lower into
+  ;; upper. We do this backwards from the end of the buffer
+  ;; so that we are preserving text as it ripples down.
 linecopy
-;LFF4C
-        ldy     #$3F
+  ldy #MAXCOL
 charcopy
-;LFF4E
-        lda     (lower),y
-        sta     (upper),y
-        dey
-        bne     charcopy
-        lda (lower)   ; copy the last character
-        sta (upper)
-        sec
-        lda     lower
-        sta     upper
-        sbc     #$40
-        sta     lower
-        lda     lower+1
-        sta     upper+1
-        sbc     #$00
-        sta     lower+1
-        lda     upper
-        cmp     rowbase
-        bne     linecopy ; LFF4C
-        lda     upper+1
-        cmp     rowbase+1
-        bne     linecopy ; LFF4C
-        inc     row
-        stz     col
-        jsr moveto
-        ldy     #$3F
-spaceloop
-;LFF7F
-        lda     #$20
-        jsr     puta
-        lda     #$00
-        sta     (rowbase),y
-        dey
-        bne     spaceloop
-        sta     (rowbase),y  ; do the last byte
+  lda (lower),y
+  sta (upper),y
+  dey
+  bne charcopy
+  lda (lower)   ; copy the last character
+  sta (upper)
 
-        clc
-        lda     rowbase
-        adc     #$40
-        sta     lower
-        lda     rowbase+1
-        adc     #$00
-        sta     lower+1
-        stz col
-        lda row
-        pha
-        inc row
-        jsr moveto
+  sec           ; lower line now becomes upper line
+  lda lower     ; and lower moves down by one line
+  sta upper
+  sbc #NCOLS
+  sta lower
+  lda lower+1
+  sta upper+1
+  sbc #$00
+  sta lower+1
+
+  lda upper      ; stop when upper hits the new line we're at
+  cmp rowbase
+  bne linecopy
+  lda upper+1
+  cmp rowbase+1
+  bne linecopy
+.)
+  rts
+
+;;; move lines up when one line is deleted. starts from rowbase (row
+;;; being deleted) up to the end
+rippleup
 .(
-rowloop
-        ldy     #$00
+  clc
+  lda rowbase
+  sta lower         ; set lower to be same as rowbase
+  adc #NCOLS        ; and upper to be one row later
+  sta upper
+  lda rowbase+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  clc               ; calculate limit for copying
+  lda #<TEXTBASE
+  adc #<TEXTSIZE
+  sta jmpvec        ; weird, but just temporary
+  lda #>TEXTBASE
+  adc #>TEXTSIZE
+  sta jmpvec+1
+
+copyrow
+  ldy #0
 charloop
-        lda     (lower),y
-        beq     endofline
-        jsr     puta
-        cpy     #$3F
-        beq     endofline
-        iny
-        bra   charloop
+  lda (upper),y
+  sta (lower),y
+  beq endofline
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra charloop
 endofline
-;LFFB4
-        jsr     clrtoeol ; L03F1
-        lda     row
-        cmp     #$13
-        beq     done; LFFCF
-        inc     row
-        jsr     moveto
-.(
-        clc
-        lda     lower
-        adc     #$40
-        sta     lower
-        bcc     doneadd
-        inc     lower+1
-doneadd
-;LFFCD
-.)
-        bra   rowloop
-.)
+
+  clc               ; move upper to lower, and increment upper
+  lda upper         ; by one row
+  sta lower
+  adc #NCOLS
+  sta upper
+  lda upper+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  lda upper
+  cmp jmpvec
+  bne copyrow
+  lda upper+1
+  cmp jmpvec+1
+  bne copyrow
+
+  ;; now clear out that last line (now lower)
+  ldy #0
+  lda #0
+loop
+  sta (lower),y
+  cpy #MAXCOL
+  beq done
+  iny
+  bra loop  
 done
-;LFFCF
-        pla
-        sta     row
-        jsr     moveto
-finish
-        jmp     editloop
+.)
+  rts
 
-breakline
-        jmp     editloop
+delline
+  ldy col           ; are we at the start of the line?
+  bne midline       ; no
 
+  lda (rowbase),y   ; is the line empty?
+  beq closeline     ; yes, so close it up
+
+  ;; delete contents of this line (and erase with spaces)
+  ldy #0
+.(
+clearloop
+  lda (rowbase),y
+  beq endofline
+  lda #0
+  sta (rowbase),y
+  lda #32
+  jsr puta
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra clearloop
+endofline
+  jsr moveto
+  jmp editloop
+.)
+
+closeline
+  jsr rippleup
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
+
+
+;; move to the bottom of the screen and quit via rts
 exit
-        lda     #$15
-        sta     row
-        lda     #$00
-        sta     col
-        jsr     moveto
-        rts
+  lda #$15
+  sta row
+  lda #$00
+  sta col
+  jsr moveto
+  rts
 
-;; what is this for?
-;  oh! this was "testcode" for T, and it just printed a cleartoend
 testcode
-        jsr     clrtoend
-        jmp     editloop
+  jsr clrtoend
+  jmp editloop
 
 readchar
-        lda     $8801
-        and     #$08
-        beq     readchar
-        lda     $8800
-        rts
+  lda $8801
+  and #$08
+  beq readchar
+  lda $8800
+  rts
 
 undefined
-        lda     #$07
-        jsr     puta
-        jmp     editloop
+  lda #$07          ; BEL (but it doesn't do anything)
+  jsr puta
+  jmp editloop
 
