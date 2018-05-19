@@ -91,7 +91,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$2800      ; staring address for user code
+USERBASE=$3200      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -1293,7 +1293,6 @@ d134code
 dofloadcode
   .word dofload
 
-dtop
 d135entry
   .byte 7
   .byte "include"
@@ -1307,6 +1306,15 @@ d135param
   .word IOSPACE
   .word doloadcode
   .word exitcode
+
+dtop
+d136entry
+  .byte 9
+  .byte "saveblock"
+d136link
+  .word d135entry
+d136code
+  .word dosaveblock
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5988,6 +5996,15 @@ done
   jmp next
 .)
 
+dosaveblock
+.(
+  jsr sdsaveblock
+  bcc done
+  jmp abortdiskerror
+done
+  jmp next
+.)
+
 
 ;;; Load block specified by double on the stack, translating between
 ;;; number formats.
@@ -6090,6 +6107,107 @@ sdloadnext
   ;; now jump to regular block load code, skipping cache check
   ;; (because we know it's different, clearly).
   jmp startload
+
+
+;;; Save to block specified by double on the stack, translating between
+;;; number formats.
+sdsaveblock
+
+  jsr sendff
+
+  ;; set cs to 0
+  lda #SD_CS
+  trb PORTB
+
+  ;; send cmd24 with parameter from the stack
+  lda #SPI_CMD+24
+  jsr sendbyte
+  lda stackbase+4,x
+  jsr sendbyte
+  lda stackbase+3,x
+  jsr sendbyte
+  lda stackbase+2,x
+  jsr sendbyte
+  lda stackbase+1,x
+  jsr sendbyte
+  lda #$95          ; crc, doesn't matter
+  jsr sendbyte
+
+  jsr setidle
+  jsr getresponse
+  cmp #0
+  bne abortsave
+
+  jsr sendff
+  ;; set cs to 0
+  lda #SD_CS
+  trb PORTB
+
+  jsr sendtoken
+  jsr sendblock
+  jsr setidle
+
+  jsr getresponse
+  and #%00001110
+  cmp #4
+  bne abortsave
+
+  ;; now wait until the card is ready again. card will hold the data
+  ;; line low while it is processing.
+.(
+busywait
+  jsr recv8bits
+  beq busywait
+.)
+
+finishsave
+  inx               ; clean up the stack
+  inx
+  inx
+  inx  
+  clc
+  rts
+
+abortsave
+  inx               ; clean up the stack
+  inx
+  inx
+  inx
+  sec               ; set flag to signal error
+  rts
+
+
+sendtoken
+  lda #254
+  jsr sendbyte
+  rts
+
+sendblock
+  phx
+  ;; send the first 256 bytes from LBLOCK
+  ldx #0
+.(
+sendloop
+  lda LBLOCK,x
+  jsr sendbyte
+  inx
+  bne sendloop
+.)
+
+  ;; send the second 256 bytes from HBLOCK
+  ldx #0
+.(
+sendloop
+  lda HBLOCK,x
+  jsr sendbyte
+  inx
+  bne sendloop
+.)
+  lda #0
+  jsr sendbyte      ; types for CRC
+  jsr sendbyte
+  plx
+  rts
 
 
 ;; load the root directory
