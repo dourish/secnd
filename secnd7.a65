@@ -7171,21 +7171,57 @@ good
 ;;; BLOCK finds a buffer allocated for the block given on the stack
 ;;; and loads it into memory.
 doblock
-  ;; make a copy of the block number
+  ;; make a copy of the block number (subtracting 1, because blocks
+  ;; are numbered from one, and we will need to translate this into
+  ;; a zero-ranged sector address).
+  sec
+  lda stackbase+1,x
+  sbc #1
+  sta SCRATCH+2
+  lda stackbase+2,x
+  sbc #0
+  sta SCRATCH+3
 
   ;; allocate a buffer
-  jsr buffer
+  jsr buffersub
 
   ;; translate block into a sector number. note that blocks
-  ;; are numbered from 1.
+  ;; are numbered from 1, but we have already subtracted that.
+  ;; multiply by two, and add the base address. leave result on
+  ;; the stack.
+  dex
+  dex
+  dex
+  dex
+  asl SCRATCH+2
+  rol SCRATCH+3
+  clc
+  lda SCRATCH+2
+  adc USEBASE
+  sta stackbase+1,x
+  lda SCRATCH+3
+  adc USEBASE+1
+  sta stackbase+2,x
+  lda USEBASE+2
+  adc #0
+  sta stackbase+3,x
+  lda USEBASE+3
+  adc #0
+  sta stackbase+4,x
 
   ;; load the first sector (512 bytes)
+  jsr sdloadblock
+
   ;; copy into the buffer
+  ;; DO THIS
+
   ;; load the second sector (512 bytes)
+  jsr sdloadnext
+
   ;; copy into the buffer
+  ;; DO THIS
 
-  ;; return the buffer data address
-
+  ;; finish, with the buffer data address still on the stack
   jmp next
 
 
