@@ -11,14 +11,15 @@
 ;;;
 
 
-temp=$00A0
-row=$00A1
-col=$00A2
-rowbase=$00A3 ; and 00A4
-count=$00A5
-upper=$00A6 ; and 00A7
-lower=$00A8 ; and 00A9
-jmpvec=$00B0 ; and 00B1
+SCRATCH=$00A0
+temp=SCRATCH
+row=SCRATCH+1
+col=SCRATCH+2
+rowbase=SCRATCH+3 ; and 4
+count=SCRATCH+5
+upper=SCRATCH+6   ; and 7
+lower=SCRATCH+8   ; and 9
+jmpvec=SCRATCH+10 ; and 11
 
 TEXTBASE=$6000
 TEXTSIZE=1280    ; 64 * 200
@@ -27,13 +28,20 @@ MAXROW=NROWS-1
 NCOLS=64
 MAXCOL=NCOLS-1
 
+ACIA_DATA    = $8800
+ACIA_STATUS  = $8801
+ACIA_COMMAND = $8802
+ACIA_CONTROL = $8803
+
 
 * = $0300
 
-        jmp     begin
+  jmp begin
 
+
+;;; table of entry points for the commands invoked by each
+;;; control-key.
 table
-
   .word tostart     ; a
   .word back        ; b
   .word undefined   ; c
@@ -45,10 +53,10 @@ table
   .word undefined   ; i
   .word undefined   ; j
   .word delline     ; k
-  .word undefined   ; l
+  .word repaint     ; l
   .word newline     ; m
   .word next        ; n
-  .word undefined   ; o
+  .word openline    ; o
   .word prev        ; p
   .word undefined   ; q
   .word undefined   ; r
@@ -70,35 +78,36 @@ begin
   sei
 
   ;; set up ACIA
-  lda     #$0B
-  sta     $8802
-  lda     #$1F
-  sta     $8803
+  lda #$0B
+  sta ACIA_COMMAND
+  lda #$1F
+  sta ACIA_CONTROL
 
-  lda     #$00      ; initialize rowbase
-  sta     rowbase
-  lda     #$60
-  sta     rowbase+1
+  lda #$00      ; initialize rowbase
+  sta rowbase
+  lda #$60
+  sta rowbase+1
 
 .(
   ;; this stuff is zeroing out the text block
-  lda     #MAXROW ; or NROWS? #$14
-  sta     count
+  lda #NROWS
+  sta count
 rowloop
-  lda     #$00
-  ldy     #MAXCOL ; #$3F
+  lda #$00
+  ldy #MAXCOL ; #$3F
 zeroloop
-  sta     (rowbase),y
+  sta (rowbase),y
   dey
-  bne     zeroloop
+  bne zeroloop
+  sta (rowbase)
 
 .(
   clc
-  lda     rowbase
-  adc     #$40
-  sta     rowbase
-  bcc     doneadd
-  inc     rowbase+1
+  lda rowbase
+  adc #NCOLS
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
 doneadd
 .)
   lda count
@@ -106,214 +115,300 @@ doneadd
   sta count
   bne rowloop
 .)
-  lda #$00          ; set it back again
+
+  ;; reset variables and screen for startup
+  lda #<TEXTBASE
   sta rowbase
-  lda #$60
+  lda #>TEXTBASE
   sta rowbase+1
-  lda #$03          ; upper byte of jump table
-  sta jmpvec+1
   stz row
   stz col
   jsr cls
   jsr home
 
+
+;;; This is the main editor dispatch loop. Fetch a character; if it's
+;;; in the command-code range, then look it up in the table; otherwise,
+;;; insert it. Everything is done with JMPs and every command JMPs back
+;;; to here. Escape is handled with a separate messy routine rather
+;;; that a second table.
 editloop
 
   jsr readchar
-  cmp #$1B   ; if it's less than 27, it's a control code
-  bcs notcmd
-  dec
-  asl
-  tax
-  lda table,x
-  sta jmpvec
+  cmp #$1B        ; if it's less than 27, it's a control code
+  beq escape      ; exactly 27 is escape
+  bcs notcmd      ; over 27 is not a command
+  dec             ; subtract 1 (to turn it into a 0-ranged value)
+  asl             ; shift to multiply by two
+  tax             ; that's an offset, so put it in X
+  lda table,x     ; look up the table value at X
+  sta jmpvec      ; and store it in jmpvec
   lda table+1,x
   sta jmpvec+1
-  jmp (jmpvec)
+  jmp (jmpvec)    ; jump to the address
 
-  bra   editloop   ; shouldn't need this but just for safety
+  bra editloop    ; shouldn't need this but included for safety
 
 notcmd
-        jsr   insert  ;  L04CF
-        bra   editloop
-        brk
+  jsr insert
+  bra editloop
+
+escape
+  jsr readchar
+  cmp #"f"
+  beq escf
+  cmp #"b"
+  beq escb
+  cmp #"["
+  beq arrow
+  jmp editloop
+escf
+  jmp fowdword
+escb
+  jmp backword
+arrow
+  jsr readchar
+  cmp #"A"
+  beq arrowup
+  cmp #"B"
+  beq arrowdown
+  cmp #"C"
+  beq arrowright
+  cmp #"D"
+  beq arrowleft
+  jmp editloop
+arrowup
+  jmp prev
+arrowdown
+  jmp next
+arrowright
+  jmp forw
+arrowleft
+  jmp back
+
+;;; move forward a word. BUG only really uses spaces as delimiters;
+;;; should really use any non-alpha character.
+fowdword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+findword
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  bne findend
+  iny
+  cpy #MAXCOL
+  beq endofline
+  bra findword
+findend
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  beq found  
+  iny
+  cpy #MAXCOL
+  bne findend
+found  
+endofline
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+backword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+  beq finished
+findword
+  lda (rowbase),y
+  beq nextch
+  cmp #$20
+  bne findstart
+nextch
+  dey
+  beq startofline
+  bra findword
+findstart
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq startofline
+  cmp #$20
+  beq found  
+  dey
+  bne findstart
+found  
+startofline
+  sty col
+  jsr moveto
+finished
+  jmp editloop
+.)
+
 
 ;; for small integers (<100), convert to decimal and output
 todecimal
 .(
-        ldy     #$30
-        sty     $A0  ; temp
+  ldy #$30
+  sty temp  ; temp
 convloop
-        cmp     #$0A
-        bmi     donedigit
-        sec
-        sbc     #$0A
-        inc     $A0
-        bne     convloop
+  cmp #$0A
+  bmi donedigit
+  sec
+  sbc #$0A
+  inc temp
+  bne convloop
 donedigit
-        tay
-        lda     $A0
-        jsr     puta
-        tya
-        clc
-        adc     #$30
-        jsr     puta
-        rts
+  tay
+  lda temp
+  jsr puta
+  tya
+  clc
+  adc #$30
+  jsr puta
+  rts
 .)
 
 puta
 .(
-        pha
+  pha
 rdyloop
-        lda     $8801
-        and     #$10
-        beq     rdyloop
-        pla
-        sta     $8800
-        rts
+  lda ACIA_STATUS
+  and #$10
+  beq rdyloop
+  pla
+  sta ACIA_DATA
+  rts
 .)
 
 cls
-        lda     #$1B  ; esc
-        jsr     puta
-        lda     #$5B  ; "["
-        jsr     puta
-        lda     #$32  ; "2"
-        jsr     puta
-        lda     #$4A  ; "J"
-        jsr     puta
-        rts
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; "["
+  jsr puta
+  lda #$32  ; "2"
+  jsr puta
+  lda #$4A  ; "J"
+  jsr puta
+  rts
 
 home
-        lda     #$1B  ; esc
-        jsr     puta
-        lda     #$5B  ; [
-        jsr     puta
-        lda     #$48  ; H
-        jsr     puta
-        rts
-
-clrtoeol
-        lda     #$1B
-        jsr     puta
-        lda     #$5B
-        jsr     puta
-        lda     #$30
-        jsr     puta
-        lda     #$4B ; K
-        jsr     puta
-        rts
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$48  ; H
+  jsr puta
+  rts
 
 clrtoend
-        lda     #$1B  ; ESC
-        jsr     puta
-        lda     #$5B  ; [
-        jsr     puta
-        lda     #$30  ; 0
-        jsr     puta
-        lda     #$4A ; H
-        jsr     puta
-        rts
+  lda #$1B  ; ESC
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$30  ; 0
+  jsr puta
+  lda #$4A ; H
+  jsr puta
+  rts
+
+moveto
+  lda #$1B ; ESC
+  jsr puta
+  lda #$5B ; [
+  jsr puta
+  lda row  ; row
+  inc
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr puta
+  lda col  ; col
+  inc
+  jsr todecimal
+  lda #$48  ; H
+  jsr puta
+  rts
 
 next
 .(
-        lda     row
-        cmp     #MAXROW ; #$13
-        beq     donothing
-        inc     row
+  lda row
+  cmp #MAXROW ; #$13
+  beq donothing
+  inc row
 .(
-        clc
-        lda     rowbase
-        adc     #NCOLS ; #$40
-        sta     rowbase
-        bcc     doneadd
-        inc     rowbase+1
+  clc
+  lda rowbase
+  adc #NCOLS ; #$40
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
 doneadd
 .)
-       jsr     moveto
+ jsr moveto
 donothing
-       jmp     editloop
+ jmp editloop
 .)
 
 prev
 .(
-        lda     row
-        beq     donothing
-        dec     row
-        sec
-        lda     rowbase
-        sbc     #NCOLS ; #$40
-        sta     rowbase
-        lda     rowbase+1
-        sbc     #$00
-        sta     rowbase+1
-        jsr     moveto
+  lda row
+  beq donothing
+  dec row
+  sec
+  lda rowbase
+  sbc #NCOLS ; #$40
+  sta rowbase
+  lda rowbase+1
+  sbc #$00
+  sta rowbase+1
+  jsr moveto
 donothing
-       jmp     editloop
+  jmp editloop
 .)
 
 back
 .(
-        lda     col
-        beq     donothing
-        dec     col
-        jsr     moveto
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
 donothing
-       jmp     editloop
+ jmp editloop
 .)
 
 forw
 .(
-        lda     col
-        cmp     #MAXCOL ; #$3F
-        beq     donothing
-        inc     col
-        jsr     moveto
+  lda col
+  cmp #MAXCOL ; #$3F
+  beq donothing
+  inc col
+  jsr moveto
 donothing
-       jmp     editloop
+ jmp editloop
 .)
 
-        ;.byte   $64 ; STZ zero page so this STZ xxx, JSR something
-        ; LDX imm is $A2, so this is STZ $A2, JSR xxxx
-        ; is this start-of-line? STZ col, JSR Moveto, 
-        ;ldx     #$20
-        ;sty     $04
 tostart
-	stz col
-	jsr moveto
-        jmp     editloop
+  stz col
+  jsr moveto
+  jmp editloop
 
 toend
 .(
-        ldy     #$00
+  ldy #$00
 endloop
-        lda     (rowbase),y
-        beq     atend
-        iny
-        cpy     #MAXCOL ;#$3F
-        beq     atend
-        bra     endloop
-atend   sty     col
-        jsr     moveto
-        jmp     editloop
+  lda (rowbase),y
+  beq atend
+  iny
+  cpy #MAXCOL ;#$3F
+  beq atend
+  bra endloop
+atend
+  sty col
+  jsr moveto
+  jmp editloop
 .)
-
-moveto
-        lda     #$1B ; ESC
-        jsr     puta
-        lda     #$5B ; [
-        jsr     puta
-        lda     row  ; row
-        .byte   $1A
-        jsr     todecimal; L03A2
-        lda     #$3B  ; semic
-        jsr     puta
-        lda     col  ; col
-        .byte   $1A
-        jsr     todecimal; L03A2
-        lda     #$48  ; H
-        jsr     puta
-        rts
 
 delfwd
 .(
@@ -336,36 +431,36 @@ done
 
 delback
 .(
-        lda     col
-        beq     donothing
-        dec     col
-        jsr     moveto
-        jmp     delfwd
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+  jmp delfwd
 donothing
-        jmp     editloop
+  jmp editloop
 .)
 
 insert
-        pha
-        ldy     col
-        lda     (rowbase),y
-        bne     notatend
+  pha
+  ldy col
+  lda (rowbase),y
+  bne notatend
 inschar
-        pla
-        sta     (rowbase),y
-        jsr     puta
-        inc     col
-        jsr     moveto
-        rts
+  pla
+  sta (rowbase),y
+  jsr puta
+  inc col
+  jsr moveto
+  rts
 
 notatend
-        phy             ; .byte   $5A
-        inc     col
-        jsr     moveto
-        dec     col
-        ply             ;.byte   $7A
-        ;; move the rest of the line right by one character
-        lda     (rowbase),y
+  phy
+  inc col
+  jsr moveto
+  dec col
+  ply
+  ;; move the rest of the line right by one character
+  lda (rowbase),y
 insloop
   iny
   pha
@@ -470,7 +565,7 @@ finish
   jmp editloop
 
 breakline ;; TO BE IMPLEMENTED
-    jmp editloop
+  jmp editloop
 
 
 ;; output the text for one row, pointed to by lower. do it
@@ -480,12 +575,12 @@ paintrow
   phy
   ldy #0
 rdyloop
-  lda $8801
+  lda ACIA_STATUS
   and #$10
   beq rdyloop
   lda (lower),y
   beq done
-  sta $8800
+  sta ACIA_DATA
   iny
   cpy #MAXCOL
   beq done
@@ -495,8 +590,8 @@ done
   rts
 .)
 
-;; clear below and print from current row to the bottom of
-;; of the screen.
+;;; clear below and print from current row to the bottom of
+;;; of the screen. (uses rowbase to point to line)
 paintdown
 .(
   lda rowbase
@@ -532,6 +627,60 @@ endpaint
   sta row
   jsr moveto
   rts
+.)
+
+
+;;; repaint the whole screen, saving and then restoring cursor position
+;;;
+repaint
+  lda row
+  pha
+  lda col
+  pha
+  lda rowbase
+  pha
+  lda rowbase+1
+  pha
+  stz row
+  stz col
+  lda #<TEXTBASE
+  sta rowbase
+  lda #>TEXTBASE
+  sta rowbase+1
+  jsr cls
+  jsr home
+  jsr paintdown
+  pla
+  sta rowbase+1
+  pla
+  sta rowbase
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  jmp editloop
+
+
+;;; open a new line
+openline
+.(
+  ldy col
+  bne midline
+  jsr rippledown
+  ldy #0
+  lda #0
+clearloop
+  sta (rowbase),y
+  iny
+  cpy #MAXCOL
+  bne clearloop
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
 .)
 
 ;;; move lines down to open up a space. starts from the last line and
@@ -636,7 +785,6 @@ copyrow
 charloop
   lda (upper),y
   sta (lower),y
-  beq endofline
   cpy #MAXCOL
   beq endofline
   iny
@@ -673,6 +821,9 @@ done
 .)
   rts
 
+
+;;; delete line (^K) -- clears the line when there is text, and close
+;;; up the line if it's empty.
 delline
   ldy col           ; are we at the start of the line?
   bne midline       ; no
@@ -723,10 +874,10 @@ testcode
   jmp editloop
 
 readchar
-  lda $8801
+  lda ACIA_STATUS
   and #$08
   beq readchar
-  lda $8800
+  lda ACIA_DATA
   rts
 
 undefined
