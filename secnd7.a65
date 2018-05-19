@@ -36,6 +36,7 @@
 ;;;
 
 SCRATCH    = $0010  ; through to $001F (adopted from monitor)
+PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 
 ;;; MEMORY MAP
 ;;;
@@ -5446,56 +5447,29 @@ abort
 
 ;;; ABORT with a message about nesting
 abortnest
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda nesting,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<nestingmsg
+  sta PRINTVEC
+  lda #>nestingmsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
 ;;; ABORT with a message about nesting
 abortcompile
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda compileerr,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<compileerr
+  sta PRINTVEC
+  lda #>compileerr
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
   
 ;;; ABORT with a message about an undefined word
 abortnotdef
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda cantinterpret,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<notdefinedmsg
+  sta PRINTVEC
+  lda #>notdefinedmsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
 
@@ -5624,56 +5598,29 @@ done
 
 ;;; ABORT with a message about card not initializing
 abortcardfail
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda cardfailmsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<cardfailmsg
+  sta PRINTVEC
+  lda #>cardfailmsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
 ;;; ABORT with a disk error
 abortdiskerror
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda diskerrormsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<diskerrormsg
+  sta PRINTVEC
+  lda #>diskerrormsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
-;;; ABORD with a file error
+;;; ABORT with a file error
 abortnofile
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda nofilemsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+  lda #<nofilemsg
+  sta PRINTVEC
+  lda #>nofilemsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
 
@@ -7448,6 +7395,28 @@ cleanup
 .)
   rts
 
+
+;;; print the string pointed to at PRINTVEC
+;;;
+printvecstr
+  ldy #0
+.(
+next_char
+wait_txd_empty  
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  lda (PRINTVEC),y
+  beq endstr
+  sta ACIA_DATA
+  iny
+  bra next_char
+endstr
+.)
+  rts
+
+
+
 ;;; this is just here because the stack code needs it... should
 ;;; reoganize my files...
 putax
@@ -7460,8 +7429,8 @@ putax
 greeting	 .byte "SECND 6502 Forth v07 (Paul Dourish, 2017-12)", $00
 ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
-cantinterpret:   .byte ": not defined", $00
-nesting:	 .byte "  nesting mismatch", $00
+notdefinedmsg:   .byte ": not defined", $00
+nestingmsg:	 .byte "  nesting mismatch", $00
 compileerr:      .byte "  compile-only word encountered", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
 inityesmsg:      .byte " initialized", $0d, $0a, $00
