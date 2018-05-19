@@ -46,7 +46,8 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 1FFF is the interpreter and compiler code (this file)
-;;; 2000 through 7BFF is user dictionary space
+;;; 2000 through 63DF is user dictionary space
+;;; 63E0 through 7BFF is I/O block space
 ;;; 7C00 through 7DFF is low-level SD I/O buffer space (512 byte block)
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
 ;;; 7EC0 through 7EFF is temporary string processing space
@@ -88,6 +89,9 @@ PADPTR=$0063        ; and 0064 (pointer to text area)
 SOURCE=$0065
 INBUFF=$0066        ; and 0067
 CURSEC=$0068        ; through $0071 (current loaded sector)
+USEBASE=$0072       ; through $0075 (base sector address for block file)
+USE=$0076
+PREV=$0078
 RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
@@ -98,6 +102,7 @@ DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
 IOSPACE=$6000       ; start of buffer space
+FIRST=$63E0         ; start of space for blocks/disk buffers
 
 MBR=$0200           ; cache SD card master boot record in unused stack space
 MBR_NFATS=$0210     ; address of FAT count within cache
@@ -119,6 +124,9 @@ DOFLAG=$FD          ; left by DO
 BEGINFLAG=$FC       ; left by BEGIN
 WHILEFLAG=$FB       ; left by WHILE
 
+BLOCKSIZE=1024
+BUFFERSIZE=BLOCKSIZE+4
+LIMIT=FIRST+6*BUFFERSIZE
 
   jmp coldstart     ; jump past code defined in stack routines
 
@@ -1308,7 +1316,6 @@ d135param
   .word doloadcode
   .word exitcode
 
-dtop
 d136entry
   .byte 9
   .byte "saveblock"
@@ -1316,6 +1323,30 @@ d136link
   .word d135entry
 d136code
   .word dosaveblock
+
+d137entry
+  .byte 3
+  .byte "use"
+d137link
+  .word d136entry
+d137code
+  .word douse
+
+d138entry
+  .byte 5
+  .byte "block"
+d138link
+  .word d137entry
+d138code
+  .word doblock
+
+dtop
+  .byte 6
+  .byte "buffer"
+d139link
+  .word d138entry
+d139code
+  .word dobuffer
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1374,7 +1405,7 @@ dummyexit
 
 
 ;;;
-;;; INNER INTERPRETER
+;;; *** INNER INTERPRETER
 ;;;
 ;;; The three routines below -- NEXT, DOLIST, and EXIT -- are the core
 ;;; of the inner interpreter, which executes stored words.
@@ -4956,7 +4987,7 @@ swap32
 
 
 ;;;
-;;; TEXT INTERPRETER
+;;; *** TEXT INTERPRETER
 ;;;
 ;;; For the moment, this is a basically a stopgap. The real FORTH
 ;;; text interpreter has many individual components that manifest
@@ -5474,7 +5505,7 @@ abortnotdef
 
 
 ;;;
-;;; SD CARD SUPPORT
+;;; *** SD CARD SUPPORT
 ;;;
 ;;; I have an SD breakout card attached to Port B on the 6522. These
 ;;; routines are the drivers to initialize, read, and write, as
@@ -6466,6 +6497,49 @@ endshow
   jmp next
 
 
+;;; USE specifies the block file from which subsequent block operations
+;;; should load and save.
+douse
+  jsr readnext      ; get next word and put it into input buffer
+  jsr matchname     ; see what we get
+
+.(
+  bcc continue
+  jmp abortnofile
+
+continue
+.)
+  ;; now, SCRATCH+6/7 points to directory entry
+
+  ;; first, grab the block number and push onto stack as a double
+  dex
+  dex
+  dex
+  dex
+  ldy #26
+  lda (SCRATCH+6),y ; LSB
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH+6),y ; MSB
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; turn block count on stack into sector count, and stash
+  ;; it for future reference
+  jsr cltosector
+  lda stackbase+1,x
+  sta USEBASE
+  lda stackbase+2,x
+  sta USEBASE+1
+  lda stackbase+3,x
+  sta USEBASE+2
+  lda stackbase+4,x
+  sta USEBASE+3
+
+  jmp next
+
+
 ;; NOTE this uses SCRATCH+4,5,10,11,12,13,14,15. getblock uses 8,9.
 dofload
 
@@ -6970,6 +7044,179 @@ recvloop
 .)
   rts               ; return with data in A
 
+
+;;;
+;;; *** BUFFER/BLOCK/VIRTUAL MEMORY
+;;;
+;;; I don't implement the full panoply of regular FORTH routines
+;;; just yet (and perhaps never), but this is enough to get things
+;;; going and then incorporate the editor. Blocks are 1024 characters
+;;; long, so buffers are 1028 bytes.
+;;; 
+
+;;; BUFFER allocates a buffer, which might require flushing out
+;;; old data. All the activity happens in a subroutine so that I can
+;;; also call it from inside the code for BLOCK.
+dobuffer
+  jsr buffersub
+  jmp next
+
+
+buffersub
+  dex               ; make two bytes of working space on the stack
+  dex
+
+  lda FIRST
+  sta stackbase+1,x
+  sta SCRATCH
+  lda FIRST+1
+  sta stackbase+2,x
+  sta SCRATCH+1
+
+  ;; is the buffer currently loaded?
+  ;; if so, return that one
+.(
+checkbuffer
+  ldy #0
+  lda (SCRATCH),y
+  cmp stackbase+3,x
+  bne checknext
+  iny
+  lda (SCRATCH),y
+  cmp stackbase+4,x
+  beq foundbuffer   ; yes, so return this buffer
+
+checknext
+  jsr plusbuf       ; no, so move on to the next one
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  bra checkbuffer
+.) 
+foundbuffer
+  clc               ; return ptr to the first data byte of the buffer
+  lda stackbase+1,x ; which is two bytes after the buffer address itself
+  adc #2
+  sta stackbase+3,x ; leave these over the buffer number on the stack
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+4,x
+  inx               ; clean up the stack
+  inx
+  jmp next
+
+allocatebuffer
+  ;; start with the buffer marked by USE
+  lda USE
+  sta stackbase+1,x
+  lda USE+1
+  sta stackbase+2,x
+
+  ;; look at the next buffer address
+  ;; is it the same as prev?
+  ;; if not, we're good
+.(
+checkbuffer
+  lda stackbase+1,x
+  cmp PREV
+  bne good
+  lda stackbase+2,x
+  cmp PREV
+  bne good
+
+  ;; if so, pick another
+  jsr plusbuf
+  bne checkbuffer
+.)
+
+good
+  ;; is the buffer dirty?
+  ;; BUG NOT EVEN DOING THIS TEST FOR NOW
+  ;; if not, we're good
+  ;; if so, write it out
+  ;;
+
+  ;; update the block number in the header
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #1
+  lda stackbase+3,x
+  sta (SCRATCH)
+  lda stackbase+4,x
+  sta (SCRATCH),y
+
+  ;; update USE and PREV
+  clc
+  lda stackbase+1,x
+  sta PREV
+  adc #2            ; we return a data address, which is BUF+2
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta PREV+1
+  adc #0
+  sta stackbase+4,x
+  jsr plusbuf
+  lda stackbase+1,x
+  sta USE
+  lda stackbase+2,x
+  sta USE+1
+  dex
+  dex
+  rts
+
+
+;;; BLOCK finds a buffer allocated for the block given on the stack
+;;; and loads it into memory.
+doblock
+  ;; make a copy of the block number
+
+  ;; allocate a buffer
+  jsr buffer
+
+  ;; translate block into a sector number. note that blocks
+  ;; are numbered from 1.
+
+  ;; load the first sector (512 bytes)
+  ;; copy into the buffer
+  ;; load the second sector (512 bytes)
+  ;; copy into the buffer
+
+  ;; return the buffer data address
+
+  jmp next
+
+
+;;; Take a buffer pointer on the stack and cycles it to the next
+;;; buffer pointer, circling around.
+plusbuf
+.(
+  clc
+  lda stackbase+1,x
+  adc #<BUFFERSIZE  ; increment to next buffer
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #>BUFFERSIZE
+  sta stackbase+2,x
+  cmp #>LIMIT       ; have we run out of buffers?
+  bne done
+  lda SCRATCH
+  cmp #<LIMIT
+  bne done
+
+  lda FIRST
+  sta stackbase+1,x
+  lda FIRST+1
+  sta stackbase+2,x
+done
+  rts
+.)
+
+;;; Marks the most recently accessed buffer as edited.
+doupdate
+  jmp next
 
 
 ;;;
