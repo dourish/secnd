@@ -126,7 +126,8 @@ WHILEFLAG=$FB       ; left by WHILE
 
 BLOCKSIZE=1024
 BUFFERSIZE=BLOCKSIZE+4
-LIMIT=FIRST+6*BUFFERSIZE
+BUFFERSPACE=BUFFERSIZE*6
+LIMIT=FIRST+BUFFERSPACE
 
   jmp coldstart     ; jump past code defined in stack routines
 
@@ -176,13 +177,22 @@ coldstart
   ;; initialize the 6522 for the SD routines
   jsr setup6522
 
+  ;; initialize pointers and memory for BLOCK code
+  stz PREV
+  stz PREV+1
+  lda #<FIRST
+  sta USE
+  lda #>FIRST
+  sta USE+1
+  jsr zerobuffers
+
   ;; jump to text interpreter
   jmp startinterp
 
 
 
 ;;;
-;;; DICTIONARY
+;;; *** DICTIONARY
 ;;;
 ;;; Each entry in the dictionary comprises:
 ;;; - one byte that is both tags (three upper bits) and word length
@@ -1340,13 +1350,31 @@ d138link
 d138code
   .word doblock
 
-dtop
+d139entry
   .byte 6
   .byte "buffer"
 d139link
   .word d138entry
 d139code
   .word dobuffer
+
+d140entry
+  .byte 6
+  .byte "update"
+d140link
+  .word d139entry
+d140code
+  .word doupdate
+
+dtop
+d141entry
+  .byte 4
+  .byte "prev"
+d141link
+  .word d140entry
+d141code
+  .word doprev
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1427,7 +1455,6 @@ dummyexit
 ;;; to keep track of what's going on.
 
 
-
 ;;; DOLIST is the executing code for a colon-defined word.
 dolist
   ;; first, push the current instruction pointer onto the
@@ -1502,12 +1529,14 @@ exit
 
 
 ;;;
-;;; PRIMITIVES
+;;; *** PRIMITIVES
+;;;
 ;;; Individual routines for each instruction. Most of these are
 ;;; regular words, whose run-time behaviour is specified here and
 ;;; at compile-time are simply written in as addresses to the code
 ;;; words in the dictionary. Some have separate compile-time and
 ;;; run-time components (e.g. DO and (DO)).
+;;;
 
 doplus
   jsr add16
@@ -6537,6 +6566,22 @@ continue
   lda stackbase+4,x
   sta USEBASE+3
 
+  ;; clean up the stack
+  inx  
+  inx
+  inx
+  inx
+
+  ;; the old buffers are no longer useful. zero them out
+  ;; and reset the pointers.
+  stz PREV
+  stz PREV+1
+  lda #<FIRST
+  sta USE
+  lda #>FIRST
+  sta USE+1
+  jsr zerobuffers
+
   jmp next
 
 
@@ -6832,7 +6877,7 @@ loop
 copy  
   sta (SCRATCH)
   inc SCRATCH
-  cpy #7
+  cpy #8
   beq endname
   iny
   bra loop
@@ -6877,6 +6922,10 @@ matchloop
 matchentry
   ldy #0
 nameloop
+  ; TEMP TESTING
+  lda (PADPTR),y
+  jsr puta
+
   lda (SCRATCH+6),y
   cmp (PADPTR),y
   bne matchfail
@@ -7062,14 +7111,19 @@ dobuffer
   jmp next
 
 
+;;; Allocates a buffer for a block number given on the stack. Looks
+;;; through current buffers to see if the block is already loaded,
+;;; and if so, returns the existing buffer. If not, looks for an
+;;; available buffer. If the buffer it wants to use is already
+;;; allocated, and is dirty, then write it out before returning.
 buffersub
   dex               ; make two bytes of working space on the stack
   dex
 
-  lda FIRST
+  lda #<FIRST
   sta stackbase+1,x
   sta SCRATCH
-  lda FIRST+1
+  lda #>FIRST
   sta stackbase+2,x
   sta SCRATCH+1
 
@@ -7083,18 +7137,35 @@ checkbuffer
   bne checknext
   iny
   lda (SCRATCH),y
+  and #$7F          ; mask off the top bit, which indicates clean/dirty
   cmp stackbase+4,x
   beq foundbuffer   ; yes, so return this buffer
 
 checknext
   jsr plusbuf       ; no, so move on to the next one
+
+  lda stackbase+1,x ; have we wrapped around? if we have, leave this
+  cmp #<FIRST       ; loop and allocate a buffer
+  bne continue
+  lda stackbase+2,x
+  cmp #>FIRST
+  bne continue
+  bra allocatebuffer
+
+continue
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
   sta SCRATCH+1
   bra checkbuffer
 .) 
+
 foundbuffer
+  lda SCRATCH       ; update PREV to point to this buffer
+  sta PREV
+  lda SCRATCH+1
+  sta PREV+1
+
   clc               ; return ptr to the first data byte of the buffer
   lda stackbase+1,x ; which is two bytes after the buffer address itself
   adc #2
@@ -7102,10 +7173,14 @@ foundbuffer
   lda stackbase+2,x
   adc #0
   sta stackbase+4,x
+
   inx               ; clean up the stack
   inx
-  jmp next
+  rts
 
+;;; allocate a buffer. I don't look for an empty one. Run through how
+;;; this is likely to work with what I expect to be the initial conditions
+;;; for USE and PREV.
 allocatebuffer
   ;; start with the buffer marked by USE
   lda USE
@@ -7114,7 +7189,7 @@ allocatebuffer
   sta stackbase+2,x
 
   ;; look at the next buffer address
-  ;; is it the same as prev?
+  ;; is it the same as indicated by PREV?
   ;; if not, we're good
 .(
 checkbuffer
@@ -7131,17 +7206,25 @@ checkbuffer
 .)
 
 good
-  ;; is the buffer dirty?
-  ;; BUG NOT EVEN DOING THIS TEST FOR NOW
-  ;; if not, we're good
-  ;; if so, write it out
-  ;;
-
-  ;; update the block number in the header
-  lda stackbase+1,x
+  lda stackbase+1,x ; copy buffer pointer into SCRATCH
   sta SCRATCH
   lda stackbase+2,x
   sta SCRATCH+1
+
+  ;; is the buffer dirty?
+  ldy #1
+  lda (SCRATCH),y
+  and #$80          ; check top bit
+  beq clean
+
+  ;; buffer is dirty, so flush it before continuing
+  jsr flushbuf
+  
+clean
+  ;; at this point, stackbase+1/2 are working space containing
+  ;; a buffer address, and stackbase+3/4 is still the block #
+
+  ;; update the block number in the header
   ldy #1
   lda stackbase+3,x
   sta (SCRATCH)
@@ -7163,43 +7246,47 @@ good
   sta USE
   lda stackbase+2,x
   sta USE+1
-  dex
-  dex
+  inx               ; clean up the stack
+  inx
   rts
 
+;; flush a buffer. on entry, the buffer pointer is in SCRATCH.
+flushbuf
+  ;;
+  ;; if so, write it out
+  ;; BUG NOT EVEN DOING THIS TEST FOR NOW
+  ;;
+  lda #"F"
+  jsr puta
+  jsr puta
+  jsr puta
 
-;;; BLOCK finds a buffer allocated for the block given on the stack
-;;; and loads it into memory.
-doblock
-  ;; make a copy of the block number (subtracting 1, because blocks
-  ;; are numbered from one, and we will need to translate this into
-  ;; a zero-ranged sector address).
+  ;; make space on the stack for the sector numbers
+  dex
+  dex
+  dex
+  dex
+  
+  ;; convert buffer number to sector number and store on stack
   sec
-  lda stackbase+1,x
-  sbc #1
-  sta SCRATCH+2
-  lda stackbase+2,x
+  lda (SCRATCH)
+  sbc #1            ; first step of conversion is to subtract one
+  sta stackbase+1,x
+  lda (SCRATCH),y
+  and #127          ; mask off the dirty bit
   sbc #0
-  sta SCRATCH+3
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
 
-  ;; allocate a buffer
-  jsr buffersub
+  asl stackbase+1,x ; multiply by two. we know that this won't exceed
+  rol stackbase+2,x ; 15 bits so we can stop after two shifts/rolls.
 
-  ;; translate block into a sector number. note that blocks
-  ;; are numbered from 1, but we have already subtracted that.
-  ;; multiply by two, and add the base address. leave result on
-  ;; the stack.
-  dex
-  dex
-  dex
-  dex
-  asl SCRATCH+2
-  rol SCRATCH+3
   clc
-  lda SCRATCH+2
+  lda stackbase+1,x
   adc USEBASE
   sta stackbase+1,x
-  lda SCRATCH+3
+  lda stackbase+2,x
   adc USEBASE+1
   sta stackbase+2,x
   lda USEBASE+2
@@ -7209,19 +7296,263 @@ doblock
   adc #0
   sta stackbase+4,x
 
-  ;; load the first sector (512 bytes)
+  ;; do a 2dup because we'll need this twice
+  dex
+  dex
+  dex
+  dex
+  lda stackbase+5,x
+  sta stackbase+1,x
+  lda stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+7,x
+  sta stackbase+3,x
+  lda stackbase+8,x
+  sta stackbase+4,x
+
+  ;; copy from buffer to I/O space
+
+  clc               ; source pointer is buffer address plus two
+  lda SCRATCH
+  adc #2
+  sta SCRATCH+2
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+3
+
+  ;; copy first 256 bytes
+.(
+  ldy #0
+copyloop
+  lda (SCRATCH+2),y
+  sta LBLOCK,y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  inc SCRATCH+3     ; move forward by 256 bytes
+
+  ;; copy second 256 bytes
+.(
+  ldy #0
+copyloop
+  lda (SCRATCH+2),y
+  sta HBLOCK,y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  ;; write first sector
+  jsr sdsaveblock
+
+  ;; increment the sector number
+  clc
+  lda stackbase+1,x
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  ;; copy data for second sector from buffer to I/O space
+  inc SCRATCH+3     ; first, bump the source pointer
+
+  ;; copy first 256 bytes
+.(
+  ldy #0
+copyloop
+  lda (SCRATCH+2),y
+  sta LBLOCK,y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  inc SCRATCH+3     ; move forward by 256 bytes
+
+  ;; copy second 256 bytes
+.(
+  ldy #0
+copyloop
+  lda (SCRATCH+2),y
+  sta HBLOCK,y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  ;; write second sector
+  jsr sdsaveblock
+
+  rts  ; end of buffersub
+
+
+;;; BLOCK finds a buffer allocated for the block given on the stack
+;;; and loads it into memory.
+doblock
+  ;; make a copy of the buffer number for later reference
+  jsr dup16
+
+  ;; allocate a buffer, result left on the stack
+  jsr buffersub
+
+  ;; clear some working space on the stack
+  dex
+  dex
+  dex
+  dex
+
+  ;; at this point, stackbase+1/2/3/4 are my working space (and will
+  ;; be a sector numer). stackbase+5/6 is the buffer address.
+  ;; stackbase+7/8 is the block number that was passed in.
+
+  ;; make a copy of the block number (subtracting 1, because blocks
+  ;; are numbered from one, and we will need to translate this into
+  ;; a zero-ranged sector address).
+  sec
+  lda stackbase+7,x
+  sbc #1
+  sta stackbase+1,x
+  lda stackbase+8,x
+  sbc #0
+  sta stackbase+2,x
+
+  ;; translate block into a sector number. note that blocks
+  ;; are numbered from 1, but we have already subtracted that.
+  ;; multiply by two, and add the base address. leave result on
+  ;; the stack.
+  asl stackbase+1,x
+  rol stackbase+2,z
+  clc
+  lda stackbase+1,x
+  adc USEBASE
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc USEBASE+1
+  sta stackbase+2,x
+  lda USEBASE+2
+  adc #0
+  sta stackbase+3,x
+  lda USEBASE+3
+  adc #0
+  sta stackbase+4,x
+
+  ;; load the first sector (512 bytes), removes four byte address
+  ;; from the stack
   jsr sdloadblock
 
-  ;; copy into the buffer
-  ;; DO THIS
+  ;; BUG ought to test for load error here
 
-  ;; load the second sector (512 bytes)
+  ;; so now, stackbase+1/2 is the buffer address.
+  ;; stackbase+3/4 is the block number that was passed in.
+
+  ;; copy into the buffer
+  lda stackbase+1,x ; SCRATCH+2/3 hold destination pointer
+  sta SCRATCH+2     ; initially, the buffer pointer
+  lda stackbase+2,x
+  sta SCRATCH+3
+
+  lda #<LBLOCK      ; SCRATCH+4/5 hold the source pointer
+  sta SCRATCH+4     ; initially, LBLOCK
+  lda #>LBLOCK
+  sta SCRATCH+5
+
+.(
+  ldy#0
+copyloop
+  lda (SCRATCH+4),y
+  sta (SCRATCH+2),y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  inc SCRATCH+3     ; bump destination pointer to next page
+  lda #<HBLOCK      ; switch source pointer to HBLOCK
+  sta SCRATCH+4
+  lda #>HBLOCK
+  sta SCRATCH+5
+.(
+  ldy#0
+copyloop
+  lda (SCRATCH+4),y
+  sta (SCRATCH+2),y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  ;; load the second sector (512 bytes) for full 1k block
   jsr sdloadnext
 
-  ;; copy into the buffer
-  ;; DO THIS
+  ;; BUG ought to test for load error here...
 
-  ;; finish, with the buffer data address still on the stack
+  inc SCRATCH+3     ; bump destination pointer to next page
+  lda #<LBLOCK      ; set source pointer back to LBLOCK
+  sta SCRATCH+4
+  lda #>LBLOCK
+  sta SCRATCH+5
+
+.(
+  ldy#0
+copyloop
+  lda (SCRATCH+4),y
+  sta (SCRATCH+2),y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  inc SCRATCH+3     ; bump destination pointer to next page
+  lda #<HBLOCK      ; and source pointer to HBLOCK
+  sta SCRATCH+4
+  lda #>HBLOCK
+  sta SCRATCH+5
+.(
+  ldy#0
+copyloop
+  lda (SCRATCH+4),y
+  sta (SCRATCH+2),y
+  iny
+  cpy #0
+  bne copyloop
+.)
+
+  ;; finish, leaving the buffer data address on the stack
+  lda stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+  inx
+  inx
+  jmp next
+
+
+;;; UPDATE marks the most recently accessed buffer (pointed to by
+;;; PREV) as dirty, so that it will be written back if it needs
+;;; to be flushed.
+doupdate
+  ldy #1
+  lda (PREV),y
+  ora #128
+  sta (PREV),y
+  jmp next
+
+doprev
+  dex
+  dex
+  lda #<PREV
+  sta stackbase+1,x
+  lda #>PREV
+  sta stackbase+2,x
   jmp next
 
 
@@ -7238,21 +7569,51 @@ plusbuf
   sta stackbase+2,x
   cmp #>LIMIT       ; have we run out of buffers?
   bne done
-  lda SCRATCH
+  lda stackbase+1,x
   cmp #<LIMIT
   bne done
 
-  lda FIRST
+  lda #<FIRST
   sta stackbase+1,x
-  lda FIRST+1
+  lda #>FIRST
   sta stackbase+2,x
 done
   rts
 .)
 
-;;; Marks the most recently accessed buffer as edited.
-doupdate
-  jmp next
+
+;;; Zero out all the buffer space. The mechanism used is not very
+;;; efficient but it's designed to be agnostic as to the size of the
+;;; buffers or their number -- which is kinda silly because I know
+;;; both and they are unlikely to change... but hey, we only call this
+;;; once.
+zerobuffers
+.(
+  lda #<FIRST
+  sta SCRATCH
+  lda #>FIRST
+  sta SCRATCH+1
+
+loop
+  lda #0
+  sta (SCRATCH)
+  clc
+  lda SCRATCH
+  adc #1
+  sta SCRATCH
+  bcc doneadd
+  inc SCRATCH+1
+doneadd
+  lda SCRATCH
+  cmp #<LIMIT
+  bne loop
+  lda SCRATCH+1
+  cmp #>LIMIT
+  bne loop
+
+  rts
+.)
+
 
 
 ;;;
