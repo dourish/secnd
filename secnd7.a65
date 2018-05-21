@@ -1366,7 +1366,6 @@ d140link
 d140code
   .word doupdate
 
-dtop
 d141entry
   .byte 4
   .byte "prev"
@@ -1375,6 +1374,14 @@ d141link
 d141code
   .word doprev
 
+dtop
+d142entry
+  .byte 5
+  .byte "flush"
+d142link
+  .word d141entry
+d142code
+  .word doflush
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -6167,6 +6174,17 @@ busywait
   beq busywait
 .)
 
+  ;; update the cache of the current sector number
+  lda stackbase+1,x
+  sta CURSEC
+  lda stackbase+2,x
+  sta CURSEC+1
+  lda stackbase+3,x
+  sta CURSEC+2
+  lda stackbase+4,x
+  sta CURSEC+3
+
+
 finishsave
   inx               ; clean up the stack
   inx
@@ -6182,6 +6200,30 @@ abortsave
   inx
   sec               ; set flag to signal error
   rts
+
+sdsavenext
+  ;; copy cached block number onto the stack, adding one
+  dex
+  dex
+  dex
+  dex
+  clc
+  lda CURSEC
+  adc #1
+  sta stackbase+1,x
+  lda CURSEC+1
+  adc #0
+  sta stackbase+2,x
+  lda CURSEC+2
+  adc #0
+  sta stackbase+3,x
+  lda CURSEC+3
+  adc #0
+  sta stackbase+4,x
+
+  ;; now jump to regular block load code, skipping cache check
+  ;; (because we know it's different, clearly).
+  jmp sdsaveblock
 
 
 sendtoken
@@ -7241,6 +7283,7 @@ clean
   sta PREV+1
   adc #0
   sta stackbase+4,x
+
   jsr plusbuf
   lda stackbase+1,x
   sta USE
@@ -7249,25 +7292,26 @@ clean
   inx               ; clean up the stack
   inx
   rts
+;; end of buffersub
 
 ;; flush a buffer. on entry, the buffer pointer is in SCRATCH.
 flushbuf
   ;;
   ;; if so, write it out
-  ;; BUG NOT EVEN DOING THIS TEST FOR NOW
   ;;
   lda #"F"
   jsr puta
   jsr puta
   jsr puta
 
-  ;; make space on the stack for the sector numbers
+  ;; make space on the stack for the sector number
   dex
   dex
   dex
   dex
   
   ;; convert buffer number to sector number and store on stack
+  ldy #1
   sec
   lda (SCRATCH)
   sbc #1            ; first step of conversion is to subtract one
@@ -7296,20 +7340,6 @@ flushbuf
   adc #0
   sta stackbase+4,x
 
-  ;; do a 2dup because we'll need this twice
-  dex
-  dex
-  dex
-  dex
-  lda stackbase+5,x
-  sta stackbase+1,x
-  lda stackbase+6,x
-  sta stackbase+2,x
-  lda stackbase+7,x
-  sta stackbase+3,x
-  lda stackbase+8,x
-  sta stackbase+4,x
-
   ;; copy from buffer to I/O space
 
   clc               ; source pointer is buffer address plus two
@@ -7320,6 +7350,8 @@ flushbuf
   adc #0
   sta SCRATCH+3
 
+  lda #"1"
+  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7333,6 +7365,8 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
+  lda #"2"
+  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7344,27 +7378,18 @@ copyloop
   bne copyloop
 .)
 
+  lda #"("
+  jsr puta
   ;; write first sector
   jsr sdsaveblock
-
-  ;; increment the sector number
-  clc
-  lda stackbase+1,x
-  adc #1
-  sta stackbase+1,x
-  lda stackbase+2,x
-  adc #0
-  sta stackbase+2,x
-  lda stackbase+3,x
-  adc #0
-  sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
+  lda #")"
+  jsr puta
 
   ;; copy data for second sector from buffer to I/O space
   inc SCRATCH+3     ; first, bump the source pointer
 
+  lda #"3"
+  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7378,6 +7403,8 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
+  lda #"4"
+  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7390,9 +7417,14 @@ copyloop
 .)
 
   ;; write second sector
-  jsr sdsaveblock
+  lda #"("
+  jsr puta
+  jsr sdsavenext
+  lda #")"
+  jsr puta
 
-  rts  ; end of buffersub
+  rts
+;; end of flushbuf
 
 
 ;;; BLOCK finds a buffer allocated for the block given on the stack
@@ -7553,6 +7585,57 @@ doprev
   sta stackbase+1,x
   lda #>PREV
   sta stackbase+2,x
+  jmp next
+
+;;; Flush all buffers that are currently marked as dirty. In
+;;; some Forths, this is called SAVE-BUFFERS
+doflush
+  dex
+  dex
+  lda #<FIRST
+  sta stackbase+1,x
+  lda #>FIRST
+  sta stackbase+2,x
+
+flushloop
+  lda #"%"
+  jsr puta
+  lda stackaccess+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ;; if it's zero'd, skip
+  ldy #1
+;  lda (SCRATCH)
+;  ora (SCRATCH),y
+;  beq nextbuffer
+
+  lda (SCRATCH),y   ; test the dirty flag
+  and #128
+  beq nextbuffer
+
+  lda #"!"
+  jsr puta
+  jsr flushbuf
+
+  ldy #1            ; clear the dirty flag
+  lda (SCRATCH),y
+  ora #127
+  sta (SCRATCH),y
+
+nextbuffer
+  jsr plusbuf
+  lda stackbase+1,x
+  cmp #<FIRST
+  bne flushloop
+  lda stackbase+2,x
+  cmp #>FIRST
+  bne flushloop
+
+  inx               ; clean up the stack
+  inx
+
   jmp next
 
 
