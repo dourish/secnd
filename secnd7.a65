@@ -1374,7 +1374,6 @@ d141link
 d141code
   .word doprev
 
-dtop
 d142entry
   .byte 5
   .byte "flush"
@@ -1382,6 +1381,32 @@ d142link
   .word d141entry
 d142code
   .word doflush
+
+d143entry
+  .byte 5
+  .byte "first"
+d143link
+  .word d142entry
+d143code
+  .word dofirst
+
+d144entry
+  .byte 4
+  .byte "edit"
+d144link
+  .word d143entry
+d144code
+  .word doedit
+
+dtop
+d145entry
+  .byte 4
+  .byte "list"
+d145link
+  .word d144entry
+d145code
+  .word dolistword
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2407,12 +2432,14 @@ continue
   lda PAD           ; first, copy the length
   sta (DP)
 
+.(
   tay               ; now copy the rest of the string (backwards)
 charloop
   lda PAD,y
   sta (DP),y
   dey
   bne charloop
+.)
 
   ;; now update DP to account for the string
   clc
@@ -2545,12 +2572,14 @@ continue
   lda PAD           ; first, copy the length
   sta (DP)
 
+.(
   tay               ; now copy the rest of the string (backwards)
 charloop
   lda PAD,y
   sta (DP),y
   dey
   bne charloop
+.)
 
   ;; now update DP to account for the string
   clc
@@ -5459,6 +5488,7 @@ doneline
 ;;; by reading either a nul or the XMODEM buffer data, switch
 ;;; back to terminal input.
 readbufline
+.(
   ldy #0
   stz TCNT
 readloop
@@ -5489,7 +5519,7 @@ endofline
   adc #0
   sta INBUFF+1
   rts  
-
+.)
 
 
 ;;; Implements ABORT. On error, resets and returns to interpreter.
@@ -5538,6 +5568,44 @@ abortnotdef
   sta PRINTVEC+1
   jsr printvecstr
   jmp abort
+
+
+;;; LIST lists a disk block
+dolistword
+.(
+  jsr blocksub
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  stz SCRATCH+2
+  jsr crlf
+
+startrow
+  ldy #0
+nextchar  lda (SCRATCH),y
+  jsr puta
+  cmp #$0a
+  bne nocr
+  lda #$0d
+  jsr puta
+nocr
+  iny
+  cpy #64
+  bne nextchar
+  clc
+  lda SCRATCH
+  adc #64
+  sta SCRATCH
+  bcc doneadd
+  inc SCRATCH+1  
+doneadd
+  inc SCRATCH+2
+  lda SCRATCH+2
+  cmp #16
+  bne startrow
+.)
+  jmp next
 
 
 ;;;
@@ -6919,9 +6987,9 @@ loop
 copy  
   sta (SCRATCH)
   inc SCRATCH
-  cpy #8
-  beq endname
   iny
+  cpy #9
+  beq endname
   bra loop
 endname
   iny               ; skip "."
@@ -6964,10 +7032,6 @@ matchloop
 matchentry
   ldy #0
 nameloop
-  ; TEMP TESTING
-  lda (PADPTR),y
-  jsr puta
-
   lda (SCRATCH+6),y
   cmp (PADPTR),y
   bne matchfail
@@ -7299,10 +7363,10 @@ flushbuf
   ;;
   ;; if so, write it out
   ;;
-  lda #"F"
-  jsr puta
-  jsr puta
-  jsr puta
+;  lda #"F"
+;  jsr puta
+;  jsr puta
+;  jsr puta
 
   ;; make space on the stack for the sector number
   dex
@@ -7350,8 +7414,8 @@ flushbuf
   adc #0
   sta SCRATCH+3
 
-  lda #"1"
-  jsr puta
+;  lda #"1"
+;  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7365,8 +7429,8 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
-  lda #"2"
-  jsr puta
+;  lda #"2"
+;  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7378,18 +7442,18 @@ copyloop
   bne copyloop
 .)
 
-  lda #"("
-  jsr puta
+;  lda #"("
+;  jsr puta
   ;; write first sector
   jsr sdsaveblock
-  lda #")"
-  jsr puta
+;  lda #")"
+;  jsr puta
 
   ;; copy data for second sector from buffer to I/O space
   inc SCRATCH+3     ; first, bump the source pointer
 
-  lda #"3"
-  jsr puta
+;  lda #"3"
+;  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7403,8 +7467,8 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
-  lda #"4"
-  jsr puta
+;  lda #"4"
+;  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7417,11 +7481,11 @@ copyloop
 .)
 
   ;; write second sector
-  lda #"("
-  jsr puta
+;  lda #"("
+;  jsr puta
   jsr sdsavenext
-  lda #")"
-  jsr puta
+;  lda #")"
+;  jsr puta
 
   rts
 ;; end of flushbuf
@@ -7430,6 +7494,13 @@ copyloop
 ;;; BLOCK finds a buffer allocated for the block given on the stack
 ;;; and loads it into memory.
 doblock
+  jsr blocksub
+  jmp next
+
+;;; The actual functionality of BLOCK is broken out into this
+;;; subroutine so that it can be easily incorporated into
+;;; other words that need it.
+blocksub
   ;; make a copy of the buffer number for later reference
   jsr dup16
 
@@ -7565,7 +7636,8 @@ copyloop
   sta stackbase+4,x
   inx
   inx
-  jmp next
+  rts
+;; end of blocksub
 
 
 ;;; UPDATE marks the most recently accessed buffer (pointed to by
@@ -7587,6 +7659,15 @@ doprev
   sta stackbase+2,x
   jmp next
 
+dofirst
+  dex
+  dex
+  lda #<FIRST
+  sta stackbase+1,x
+  lda #>FIRST
+  sta stackbase+2,x
+  jmp next
+
 ;;; Flush all buffers that are currently marked as dirty. In
 ;;; some Forths, this is called SAVE-BUFFERS
 doflush
@@ -7600,17 +7681,22 @@ doflush
 flushloop
   lda #"%"
   jsr puta
-  lda stackaccess+1,x
+;  jsr dup16
+;  jsr print16u
+
+  lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
   sta SCRATCH+1
 
   ;; if it's zero'd, skip
   ldy #1
-;  lda (SCRATCH)
-;  ora (SCRATCH),y
-;  beq nextbuffer
+  lda (SCRATCH)
+  ora (SCRATCH),y
+  beq nextbuffer
 
+;  lda #"?"
+;  jsr puta
   lda (SCRATCH),y   ; test the dirty flag
   and #128
   beq nextbuffer
@@ -7621,7 +7707,7 @@ flushloop
 
   ldy #1            ; clear the dirty flag
   lda (SCRATCH),y
-  ora #127
+  and #127
   sta (SCRATCH),y
 
 nextbuffer
@@ -7696,6 +7782,844 @@ doneadd
 
   rts
 .)
+
+
+;;;
+;;; *** SCREEN EDITOR
+;;;
+;;; Basic screen editor for text, using EMACS-like commands.
+;;; Assumes 16 rows of 64 characters to fit with block/buffer size,
+;;; with nulls filling empty space.
+;;;
+
+
+;;; Just for the editor, relabel a bunch of the scratch space.
+temp=SCRATCH
+row=SCRATCH+1
+col=SCRATCH+2
+rowbase=SCRATCH+3 ; and 4
+count=SCRATCH+5
+upper=SCRATCH+6   ; and 7
+lower=SCRATCH+8   ; and 9
+jmpvec=SCRATCH+10 ; and 11
+
+NROWS=20
+MAXROW=NROWS-1
+NCOLS=64
+MAXCOL=NCOLS-1
+TEXTBASE=SCRATCH+12
+TEXTSIZE=NROWS*NCOLS
+
+;;; table of entry points for the commands invoked by each
+;;; control-key.
+table
+  .word tostart     ; a
+  .word back        ; b
+  .word undefined   ; c
+  .word delfwd      ; d
+  .word toend       ; e
+  .word forw        ; f
+  .word undefined   ; g
+  .word delback     ; h
+  .word undefined   ; i
+  .word undefined   ; j
+  .word delline     ; k
+  .word repaint     ; l
+  .word newline     ; m
+  .word nextch      ; n
+  .word openline    ; o
+  .word prev        ; p
+  .word undefined   ; q
+  .word undefined   ; r
+  .word undefined   ; s
+  .word testcode    ; t
+  .word undefined   ; u
+  .word undefined   ; v
+  .word undefined   ; w
+  .word endedit     ; x
+  .word undefined   ; y
+  .word undefined   ; z
+
+
+;;; entry point for the editor. the stack indicates the disk
+;;; block to be edited, so we start by calling block to load
+;;; it and determine the buffer address.
+doedit
+  jsr blocksub
+  lda stackbase+1,x
+  sta TEXTBASE
+  lda stackbase+2,x
+  sta TEXTBASE+1
+  phx
+  jsr beginedit
+  plx
+  dex
+  dex
+  jmp next
+
+beginedit
+  lda #$00      ; initialize rowbase
+  sta rowbase
+  lda #$60
+  sta rowbase+1
+
+  ;; reset variables and screen for startup
+  lda TEXTBASE
+  sta rowbase
+  lda TEXTBASE+1
+  sta rowbase+1
+  stz row
+  stz col
+  jmp repaint ; repaint jumps back to editloop below
+
+;;; This is the main editor dispatch loop. Fetch a character; if it's
+;;; in the command-code range, then look it up in the table; otherwise,
+;;; insert it. Everything is done with JMPs and every command JMPs back
+;;; to here. Escape is handled with a separate messy routine rather
+;;; that a second table.
+editloop
+
+  jsr getchar
+  cmp #$1B        ; if it's less than 27, it's a control code
+  beq escape      ; exactly 27 is escape
+  bcs notcmd      ; over 27 is not a command
+  dec             ; subtract 1 (to turn it into a 0-ranged value)
+  asl             ; shift to multiply by two
+  tax             ; that's an offset, so put it in X
+  lda table,x     ; look up the table value at X
+  sta jmpvec      ; and store it in jmpvec
+  lda table+1,x
+  sta jmpvec+1
+  jmp (jmpvec)    ; jump to the address
+
+  bra editloop    ; shouldn't need this but included for safety
+
+notcmd
+  jsr insert
+  bra editloop
+
+escape
+  jsr getchar
+  cmp #"f"
+  beq escf
+  cmp #"b"
+  beq escb
+  cmp #"["
+  beq arrow
+  jmp editloop
+escf
+  jmp fowdword
+escb
+  jmp backword
+arrow
+  jsr getchar
+  cmp #"A"
+  beq arrowup
+  cmp #"B"
+  beq arrowdown
+  cmp #"C"
+  beq arrowright
+  cmp #"D"
+  beq arrowleft
+  jmp editloop
+arrowup
+  jmp prev
+arrowdown
+  jmp nextch
+arrowright
+  jmp forw
+arrowleft
+  jmp back
+
+;;; move forward a word. BUG only really uses spaces as delimiters;
+;;; should really use any non-alpha character.
+fowdword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+findword
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  bne findend
+  iny
+  cpy #MAXCOL
+  beq endofline
+  bra findword
+findend
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq endofline
+  cmp #$20
+  beq found  
+  iny
+  cpy #MAXCOL
+  bne findend
+found  
+endofline
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+backword
+.(
+  ;; if we are on a space, then find a word
+  ldy col
+  beq donebackword
+findword
+  lda (rowbase),y
+  beq nextchar
+  cmp #$20
+  bne findstart
+nextchar
+  dey
+  beq startofline
+  bra findword
+findstart
+  ;; now find the end of the word
+  lda (rowbase),y
+  beq startofline
+  cmp #$20
+  beq found  
+  dey
+  bne findstart
+found  
+startofline
+  sty col
+  jsr moveto
+donebackword
+  jmp editloop
+.)
+
+
+;; for small integers (<100), convert to decimal and output
+todecimal
+.(
+  ldy #$30
+  sty temp  ; temp
+convloop
+  cmp #$0A
+  bmi donedigit
+  sec
+  sbc #$0A
+  inc temp
+  bne convloop
+donedigit
+  tay
+  lda temp
+  jsr puta
+  tya
+  clc
+  adc #$30
+  jsr puta
+  rts
+.)
+
+
+cls
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; "["
+  jsr puta
+  lda #$32  ; "2"
+  jsr puta
+  lda #$4A  ; "J"
+  jsr puta
+  rts
+
+home
+  lda #$1B  ; esc
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$48  ; H
+  jsr puta
+  rts
+
+clrtoend
+  lda #$1B  ; ESC
+  jsr puta
+  lda #$5B  ; [
+  jsr puta
+  lda #$30  ; 0
+  jsr puta
+  lda #$4A ; H
+  jsr puta
+  rts
+
+moveto
+  lda #$1B ; ESC
+  jsr puta
+  lda #$5B ; [
+  jsr puta
+  lda row  ; row
+  inc
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr puta
+  lda col  ; col
+  inc
+  jsr todecimal
+  lda #$48  ; H
+  jsr puta
+  rts
+
+nextch
+.(
+  lda row
+  cmp #MAXROW ; #$13
+  beq donothing
+  inc row
+.(
+  clc
+  lda rowbase
+  adc #NCOLS ; #$40
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
+doneadd
+.)
+ jsr moveto
+donothing
+ jmp editloop
+.)
+
+prev
+.(
+  lda row
+  beq donothing
+  dec row
+  sec
+  lda rowbase
+  sbc #NCOLS ; #$40
+  sta rowbase
+  lda rowbase+1
+  sbc #$00
+  sta rowbase+1
+  jsr moveto
+donothing
+  jmp editloop
+.)
+
+back
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+forw
+.(
+  lda col
+  cmp #MAXCOL ; #$3F
+  beq donothing
+  inc col
+  jsr moveto
+donothing
+ jmp editloop
+.)
+
+tostart
+  stz col
+  jsr moveto
+  jmp editloop
+
+toend
+.(
+  ldy #$00
+endloop
+  lda (rowbase),y
+  beq atend
+  iny
+  cpy #MAXCOL ;#$3F
+  beq atend
+  bra endloop
+atend
+  sty col
+  jsr moveto
+  jmp editloop
+.)
+
+delfwd
+.(
+  ldy     col
+delloop
+  iny
+  lda     (rowbase),y
+  dey
+  sta     (rowbase),y
+  jsr     puta
+  beq     done
+  iny
+  bra   delloop
+done
+  lda     #$20
+  jsr     puta
+  jsr     moveto
+  jmp     editloop
+.)
+
+delback
+.(
+  lda col
+  beq donothing
+  dec col
+  jsr moveto
+  jmp delfwd
+donothing
+  jmp editloop
+.)
+
+insert
+  pha
+  ldy col
+  lda (rowbase),y
+  bne notatend
+inschar
+  pla
+  sta (rowbase),y
+  jsr puta
+  inc col
+  jsr moveto
+  rts
+
+notatend
+  phy
+  inc col
+  jsr moveto
+  dec col
+  ply
+  ;; move the rest of the line right by one character
+  lda (rowbase),y
+insloop
+  iny
+  pha
+  lda (rowbase),y
+  tax
+  pla
+  sta (rowbase),y
+  jsr puta
+  txa
+  bne insloop
+  iny
+  sta (rowbase),y
+  jsr moveto
+  ldy col
+  bra inschar
+  lda row
+  cmp #MAXROW
+  bne newline
+  jmp editloop
+
+newline
+  ldy col           ; are we at the end of a line?
+  lda (rowbase),y
+  beq atend         ; if yes
+  jmp  breakline    ; if no
+
+atend
+.(
+  clc               ; reset rowbase to the new line
+  lda rowbase
+  adc #NCOLS
+  sta rowbase
+  bcc doneadd
+  inc rowbase+1
+doneadd        
+.)
+  lda (rowbase)      ; is this next line empty?
+  bne movelines      ; no, so move lines to insert a new one
+  inc row            ; yes, so move to it
+  stz col
+  jsr moveto
+  jmp editloop
+
+movelines
+  ;; move the rest of the text down by one line
+  jsr rippledown
+
+  ;; clear data out of this line
+  ldy #MAXCOL
+  lda #0
+.(
+clearloop
+  sta (rowbase),y
+  dey
+  bne clearloop
+  sta (rowbase)
+.)
+
+  ;; now that the data is in the right place, repaint the screen
+  ;; first, clear everything below the current row
+  jsr clrtoend
+  inc row           ; we haven't done that yet
+  jsr moveto
+
+  ;; stash the row count
+  lda row
+  pha
+
+  ;; now, paint rows that remain
+  clc
+  lda rowbase
+  adc #NCOLS
+  sta lower
+  lda rowbase+1
+  adc #$00
+  sta lower+1
+  stz col
+
+paintnext
+  lda row
+  inc
+  cmp #MAXROW
+  beq donerepaint
+  sta row
+  stz col
+  jsr moveto
+  jsr paintrow
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  bcc paintnext
+  inc lower+1
+  bra paintnext
+
+donerepaint
+  pla
+  sta row
+  jsr moveto
+
+finish
+  jmp editloop
+
+breakline ;; TO BE IMPLEMENTED
+  jmp editloop
+
+
+;; output the text for one row, pointed to by lower. do it
+;; directly for faster output without the subroutine call.
+paintrow
+.(
+  phy
+  ldy #0
+rdyloop
+  lda ACIA_STATUS
+  and #$10
+  beq rdyloop
+  lda (lower),y
+  beq done
+  sta ACIA_DATA
+  iny
+  cpy #MAXCOL
+  beq done
+  bra rdyloop
+done
+  ply
+  rts
+.)
+
+;;; clear below and print from current row to the bottom of
+;;; of the screen. (uses rowbase to point to line)
+paintdown
+.(
+  lda rowbase
+  sta lower
+  lda rowbase+1
+  sta lower+1
+  lda row
+  pha               ; stash the row count
+  lda col
+  pha               ; stash the column count
+  stz col
+paintloop
+  jsr moveto
+  jsr clrtoend
+  jsr paintrow
+  lda row
+  inc
+  cmp #MAXROW
+  beq endpaint
+  sta row
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  lda lower+1
+  adc #0
+  sta lower+1
+  bra paintloop
+endpaint
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  rts
+.)
+
+
+;;; repaint the whole screen, saving and then restoring cursor position
+;;;
+repaint
+  lda row
+  pha
+  lda col
+  pha
+  lda rowbase
+  pha
+  lda rowbase+1
+  pha
+  stz row
+  stz col
+  lda TEXTBASE
+  sta rowbase
+  lda TEXTBASE+1
+  sta rowbase+1
+  jsr cls
+  jsr home
+  jsr paintdown
+  pla
+  sta rowbase+1
+  pla
+  sta rowbase
+  pla
+  sta col
+  pla
+  sta row
+  jsr moveto
+  jmp editloop
+
+
+;;; open a new line
+openline
+.(
+  ldy col
+  bne midline
+  jsr rippledown
+  ldy #0
+  lda #0
+clearloop
+  sta (rowbase),y
+  iny
+  cpy #MAXCOL
+  bne clearloop
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
+.)
+
+;;; move lines down to open up a space. starts from the last line and
+;;; works its way down to the current row (rowbase).
+rippledown
+.(
+  ;; find the end of the text area by adding textsize to textbase
+  clc
+  lda TEXTBASE
+  adc #<TEXTSIZE
+  sta upper
+  lda TEXTBASE+1
+  adc #>TEXTSIZE
+  sta upper+1
+
+  ;; subtract one line length to get the last line in area
+  sec
+  lda upper
+  sbc #NCOLS
+  sta upper
+  lda upper+1
+  sbc #$00
+  sta upper+1
+
+  ;; is that the row we're on now?
+  lda upper
+  cmp rowbase
+  bne continue
+  lda upper+1
+  cmp rowbase+1
+  bne continue
+  jmp finish        ;  yes so we are done
+
+continue
+  ;; substract one more line length and store in lower
+  sec
+  lda upper
+  sbc #$40
+  sta lower
+  lda upper+1
+  sbc #$00
+  sta lower+1
+
+  ;; at this point, we have two pointers, lower and upper,
+  ;; which point to two adjacent lines at the end of the buffer.
+  ;; we want to reapeatedly copy the contents of lower into
+  ;; upper. We do this backwards from the end of the buffer
+  ;; so that we are preserving text as it ripples down.
+linecopy
+  ldy #MAXCOL
+charcopy
+  lda (lower),y
+  sta (upper),y
+  dey
+  bne charcopy
+  lda (lower)   ; copy the last character
+  sta (upper)
+
+  sec           ; lower line now becomes upper line
+  lda lower     ; and lower moves down by one line
+  sta upper
+  sbc #NCOLS
+  sta lower
+  lda lower+1
+  sta upper+1
+  sbc #$00
+  sta lower+1
+
+  lda upper      ; stop when upper hits the new line we're at
+  cmp rowbase
+  bne linecopy
+  lda upper+1
+  cmp rowbase+1
+  bne linecopy
+.)
+  rts
+
+;;; move lines up when one line is deleted. starts from rowbase (row
+;;; being deleted) up to the end
+rippleup
+.(
+  clc
+  lda rowbase
+  sta lower         ; set lower to be same as rowbase
+  adc #NCOLS        ; and upper to be one row later
+  sta upper
+  lda rowbase+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  clc               ; calculate limit for copying
+  lda TEXTBASE
+  adc #<TEXTSIZE
+  sta jmpvec        ; weird, but just temporary
+  lda TEXTBASE+1
+  adc #>TEXTSIZE
+  sta jmpvec+1
+
+copyrow
+  ldy #0
+.(
+charloop
+  lda (upper),y
+  sta (lower),y
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra charloop
+.)
+endofline
+
+  clc               ; move upper to lower, and increment upper
+  lda upper         ; by one row
+  sta lower
+  adc #NCOLS
+  sta upper
+  lda upper+1
+  sta lower+1
+  adc #0
+  sta upper+1
+
+  lda upper
+  cmp jmpvec
+  bne copyrow
+  lda upper+1
+  cmp jmpvec+1
+  bne copyrow
+  ;; now clear out that last line (now lower)
+  ldy #0
+  lda #0
+loop
+  sta (lower),y
+  cpy #MAXCOL
+  beq done
+  iny
+  bra loop  
+done
+.)
+  rts
+
+
+;;; delete line (^K) -- clears the line when there is text, and close
+;;; up the line if it's empty.
+delline
+  ldy col           ; are we at the start of the line?
+  bne midline       ; no
+
+  lda (rowbase),y   ; is the line empty?
+  beq closeline     ; yes, so close it up
+
+  ;; delete contents of this line (and erase with spaces)
+  ldy #0
+.(
+clearloop
+  lda (rowbase),y
+  beq endofline
+  lda #0
+  sta (rowbase),y
+  lda #32
+  jsr puta
+  cpy #MAXCOL
+  beq endofline
+  iny
+  bra clearloop
+endofline
+  jsr moveto
+  jmp editloop
+.)
+
+closeline
+  jsr rippleup
+  jsr paintdown
+  jmp editloop
+
+midline
+  ;; still to be implemented
+  jmp editloop
+
+
+;; move to bottom of the screen and quit via rts (back to doedit).
+endedit
+  lda #$15
+  sta row
+  lda #$00
+  sta col
+  jsr moveto
+  rts
+
+testcode
+  jsr clrtoend
+  jmp editloop
+
+getchar
+  lda ACIA_STATUS
+  and #$08
+  beq getchar
+  lda ACIA_DATA
+  rts
+
+undefined
+  lda #$07          ; BEL (but it doesn't do anything)
+  jsr puta
+  jmp editloop
+
 
 
 
@@ -7773,6 +8697,16 @@ wait_txd_empty
   rts
 
 
+;;;
+;;; *** NUMBER READING/PRINTING
+;;;
+;;; Various conversions to read and print variously-sized numbers
+;;; in various formats.
+;;;
+;;; BUG still to do: read numbers with trailing periods as
+;;; double-length.
+;;;
+
 ;; readsign16 looks on the stack for the address of a null-terminated
 ;; 16-bit number that might be preceeded with a minus sign.
 readsign16
@@ -7841,7 +8775,7 @@ donelastdigit
   ;; if we began with a minus, then calculate the two's complement
   ;; of the number we have read.
   lda SCRATCH
-  beq finish        ; no minus flag set
+  beq finishmult    ; no minus flag set
 
   ;; first, calculate 1's complement -- flip all bits
   lda stackbase+3,x
@@ -7860,7 +8794,7 @@ donelastdigit
   adc #0
   sta stackbase+4,x
 
-finish
+finishmult
   inx               ; drop one of the temporary variables
   inx               ; but leave the other, which is our result
   ply               ; restore y
@@ -8044,7 +8978,7 @@ nextbcd             ; go through this loop for each BCD digit
   and #%11110000
   bne prupper       ; not zero, so we definitely print it
   cmp SCRATCH       ; check if we are still suppressing zeros
-  beq lower         ; yes, we are. move on.
+  beq dolower       ; yes, we are. move on.
 prupper
   clc
   ror
@@ -8059,7 +8993,7 @@ prupper
   lda #$ff          ; note that printing has begun (no more leading zeros)
   sta SCRATCH
 
-lower
+dolower
   lda (SCRATCH+2),y
   and #%00001111
   bne prlower       ; non-zero so we definitely print it
@@ -8166,5 +9100,7 @@ timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
 initializedmsg:  .byte " initialized ", $00
 diskerrormsg:    .byte " disk error", $0d, $0a, $00
+readerrormsg:    .byte " read error", $0d, $0a, $00
+writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $0d, $0a, $00
