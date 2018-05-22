@@ -5633,6 +5633,7 @@ print
   bne nocr
   lda #$0d
   jsr puta
+  bra nextline
 nocr
   iny
   cpy #64
@@ -7927,7 +7928,7 @@ upper=SCRATCH+6   ; and 7
 lower=SCRATCH+8   ; and 9
 jmpvec=SCRATCH+10 ; and 11
 
-NROWS=20
+NROWS=16
 MAXROW=NROWS-1
 NCOLS=64
 MAXCOL=NCOLS-1
