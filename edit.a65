@@ -11,7 +11,7 @@
 ;;;
 
 
-SCRATCH=$00A0
+SCRATCH=$0010       ; shared with monitor and FORTH
 temp=SCRATCH
 row=SCRATCH+1
 col=SCRATCH+2
@@ -21,12 +21,12 @@ upper=SCRATCH+6   ; and 7
 lower=SCRATCH+8   ; and 9
 jmpvec=SCRATCH+10 ; and 11
 
-TEXTBASE=$6000
-TEXTSIZE=1280    ; 64 * 200
 NROWS=20
 MAXROW=NROWS-1
 NCOLS=64
 MAXCOL=NCOLS-1
+TEXTBASE=$5FE0
+TEXTSIZE=NROWS*NCOLS
 
 ACIA_DATA    = $8800
 ACIA_STATUS  = $8801
@@ -334,13 +334,13 @@ moveto
 next
 .(
   lda row
-  cmp #MAXROW ; #$13
+  cmp #MAXROW
   beq donothing
   inc row
 .(
   clc
   lda rowbase
-  adc #NCOLS ; #$40
+  adc #NCOLS
   sta rowbase
   bcc doneadd
   inc rowbase+1

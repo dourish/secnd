@@ -18,15 +18,15 @@
 ;;;
 ;;; Version history:
 ;;; v01  first basic version of interpreter up and running
-;;; v02  adding R-stack operators, variables, arrays, allot.
+;;; v02  adding R-stack operators, variables, arrays, allot
 ;;; v03  first steps for compiler, basic lists, strings, loops, conditionals
 ;;; v04  rounding out vocabulary, linking more internal operations to
 ;;;      external words, adding nest checking
 ;;; v05  recursion, double-length arithmetic, pair operations, signed
 ;;;      arithmetic
 ;;; v06  cleaning up and debugging, various new words, more internal
-;;;      elements available to Forth, performance improvements.
-;;; v07  testbed for SD card integration
+;;;      elements available to Forth, performance improvements
+;;; v07  SD card integration, block/buffer implementation, editor
 ;;;
 
   * = $0300
@@ -1140,13 +1140,13 @@ d114code
   .word doupload
 
 d115entry
-  .byte 4
-  .byte "load"
+  .byte 5
+  .byte "cload"
 d115link
   .word d114entry
 d115code
-doloadcode
-  .word doload
+docloadcode
+  .word docload
 
 d116entry
   .byte 4
@@ -1323,7 +1323,7 @@ d135param
   .word dofloadcode
   .word dolitcode
   .word IOSPACE
-  .word doloadcode
+  .word docloadcode
   .word exitcode
 
 d136entry
@@ -1335,12 +1335,12 @@ d136code
   .word dosaveblock
 
 d137entry
-  .byte 3
-  .byte "use"
+  .byte 5
+  .byte "using"
 d137link
   .word d136entry
 d137code
-  .word douse
+  .word dousing
 
 d138entry
   .byte 5
@@ -1398,7 +1398,6 @@ d144link
 d144code
   .word doedit
 
-dtop
 d145entry
   .byte 4
   .byte "list"
@@ -1407,6 +1406,46 @@ d145link
 d145code
   .word dolistword
 
+d146entry
+  .byte 4
+  .byte "load"
+d146link
+  .word d145entry
+d146code
+  .word doload
+
+d147entry
+  .byte 3
+  .byte "use"
+d147link
+  .word d146entry
+d147code
+  .word douse
+
+d148entry
+  .byte 3
+  .byte "sp@"
+d148link
+  .word d147entry
+d148code
+  .word dospat
+
+d149entry
+  .byte 2
+  .byte ";s"
+d149link
+  .word d148entry
+d149code
+  .word dosemics
+
+dtop
+d150entry
+  .byte 7
+  .byte "convert"
+d150link
+  .word d149entry
+d150code
+  .word doconvert
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -4142,9 +4181,9 @@ doupload
   jmp next
 
 
-;;; Temporarily switch input to tbe buffer location specified on
+;;; Temporarily switch input to region at location specified on
 ;;; the stack.
-doload
+docload
   jsr pop16         ; load address from the stack and set it
   lda stackaccess   ; as the memory region from which to read
   sta INBUFF        ; input text.
@@ -5570,7 +5609,7 @@ abortnotdef
   jmp abort
 
 
-;;; LIST lists a disk block
+;;; LIST prints a disk block to the screen
 dolistword
 .(
   jsr blocksub
@@ -5583,7 +5622,12 @@ dolistword
 
 startrow
   ldy #0
-nextchar  lda (SCRATCH),y
+nextchar
+  lda (SCRATCH),y
+  bne print
+  jsr crlf
+  bra nextline
+print
   jsr puta
   cmp #$0a
   bne nocr
@@ -5593,6 +5637,7 @@ nocr
   iny
   cpy #64
   bne nextchar
+nextline
   clc
   lda SCRATCH
   adc #64
@@ -5606,6 +5651,43 @@ doneadd
   bne startrow
 .)
   jmp next
+
+;;; load input from a disk block
+doload
+  jsr blocksub      ; find/load the block, leave address on stack
+  jmp docload       ; do regular character load with address
+
+douse
+  dex
+  dex
+  lda USE
+  sta stackbase+1,x
+  lda USE+1
+  sta stackbase+2,x
+  jmp next
+
+dospat
+  dex
+  dex
+  txa
+  sta stackbase+1,x
+  stz stackbase+2,x
+  jmp next
+
+dosemics
+  stz SOURCE
+  stz TPTR
+  jmp next
+
+doconvert
+  jsr buffersub
+  lda stackbase+1,x
+  sta TEXTBASE
+  lda stackbase+2,x
+  sta TEXTBASE+1
+  jsr nulltospace
+  jmp next
+
 
 
 ;;;
@@ -6636,9 +6718,9 @@ endshow
   jmp next
 
 
-;;; USE specifies the block file from which subsequent block operations
-;;; should load and save.
-douse
+;;; USING specifies the block file from which subsequent block
+;;; operations should load and save.
+dousing
   jsr readnext      ; get next word and put it into input buffer
   jsr matchname     ; see what we get
 
@@ -7303,7 +7385,7 @@ checkbuffer
   cmp PREV
   bne good
   lda stackbase+2,x
-  cmp PREV
+  cmp PREV+1
   bne good
 
   ;; if so, pick another
@@ -7325,17 +7407,24 @@ good
 
   ;; buffer is dirty, so flush it before continuing
   jsr flushbuf
+
+  ;; mark it as clean
+  ldy #1
+  lda (SCRATCH),y
+  and #127
+  sta (SCRATCH),y
   
 clean
   ;; at this point, stackbase+1/2 are working space containing
   ;; a buffer address, and stackbase+3/4 is still the block #
 
-  ;; update the block number in the header
-  ldy #1
-  lda stackbase+3,x
-  sta (SCRATCH)
-  lda stackbase+4,x
-  sta (SCRATCH),y
+;  ;; update the block number in the header
+;  this happens in block now
+;  ldy #1
+;  lda stackbase+3,x
+;  sta (SCRATCH)
+;  lda stackbase+4,x
+;  sta (SCRATCH),y
 
   ;; update USE and PREV
   clc
@@ -7507,6 +7596,25 @@ blocksub
   ;; allocate a buffer, result left on the stack
   jsr buffersub
 
+  ;; is the block already loaded into that buffer?
+  sec               ; subtract two to get to the buffer header
+  lda stackbase+1,x
+  sbc #2
+  sta SCRATCH+2
+  lda stackbase+2,x
+  sbc #0
+  sta SCRATCH+3
+  lda (SCRATCH+2)   ; now check the block number from the header
+  cmp stackbase+3,x
+  bne loadit
+  ldy #1
+  lda (SCRATCH+2),y
+  and #127          ; mask off the dirty bit
+  cmp stackbase+4,x
+  bne loadit
+  jmp loaded
+
+loadit
   ;; clear some working space on the stack
   dex
   dex
@@ -7629,6 +7737,22 @@ copyloop
   bne copyloop
 .)
 
+  ;; now that we've successfully loaded the data,
+  ;; update the block number in the buffer header
+  sec
+  lda stackbase+1,x
+  sbc #2
+  sta SCRATCH+2
+  lda stackbase+2,x
+  sbc #0
+  sta SCRATCH+3
+  lda stackbase+3,x
+  sta (SCRATCH)
+  ldy #1
+  lda stackbase+4,x
+  sta (SCRATCH),y
+
+loaded
   ;; finish, leaving the buffer data address on the stack
   lda stackbase+1,x
   sta stackbase+3,x
@@ -7679,8 +7803,8 @@ doflush
   sta stackbase+2,x
 
 flushloop
-  lda #"%"
-  jsr puta
+;  lda #"%"
+;  jsr puta
 ;  jsr dup16
 ;  jsr print16u
 
@@ -7701,8 +7825,8 @@ flushloop
   and #128
   beq nextbuffer
 
-  lda #"!"
-  jsr puta
+;  lda #"!"
+;  jsr puta
   jsr flushbuf
 
   ldy #1            ; clear the dirty flag
@@ -7870,6 +7994,49 @@ beginedit
   sta rowbase+1
   stz row
   stz col
+
+  ;; BUG HACK HORRIBLE
+  ;; on loading, convert trailing spaces to NULs and make sure
+  ;; that there's a NUL at the end of each line
+  lda rowbase
+  sta lower
+  lda rowbase+1
+  sta lower+1
+  lda #NROWS
+  sta count
+.(
+nulloop
+  ldy #MAXCOL
+  lda #0
+  sta (lower),y
+  dey
+spaceloop
+  lda (lower),y
+  beq checknext
+  cmp #32
+  beq replace
+  cmp #10
+  beq replace
+  bra finishline
+replace
+  lda #0
+  sta (lower),y
+checknext
+  dey
+  cpy #255
+  bne spaceloop  
+finishline
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  lda lower+1
+  adc #0
+  sta lower+1
+  dec count
+  lda count
+  bne nulloop
+.)
   jmp repaint ; repaint jumps back to editloop below
 
 ;;; This is the main editor dispatch loop. Fetch a character; if it's
@@ -8596,7 +8763,9 @@ midline
 
 
 ;; move to bottom of the screen and quit via rts (back to doedit).
+;; in an ugly hack, convert nulls to spaces on exit
 endedit
+  jsr nulltospace
   lda #$15
   sta row
   lda #$00
@@ -8620,6 +8789,54 @@ undefined
   jsr puta
   jmp editloop
 
+
+;; convert nulls to spaces in the buffer and add newlines
+nulltospace
+.(
+  lda #NROWS
+  sta count
+  lda TEXTBASE
+  sta lower
+  lda TEXTBASE+1
+  sta lower+1
+
+outerloop
+  ldy #63
+innerloop
+  lda (lower),y
+  cmp #32
+  beq moveback
+  cmp #0
+  bne foundit
+  lda #32
+  sta (lower),y
+  bra moveback
+foundit
+  iny
+  lda #10
+  sta (lower),y
+  bra nextline
+moveback
+  dey
+  cpy #255          ; wrapped around?
+  bne innerloop
+  lda #10
+  sta (lower)
+nextline
+  clc
+  lda lower
+  adc #NCOLS
+  sta lower
+  bcc doneadd
+  inc lower+1
+doneadd
+  dec count
+  lda count
+  bne outerloop
+  rts
+.)
+
+  
 
 
 
