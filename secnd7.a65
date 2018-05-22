@@ -7419,14 +7419,6 @@ clean
   ;; at this point, stackbase+1/2 are working space containing
   ;; a buffer address, and stackbase+3/4 is still the block #
 
-;  ;; update the block number in the header
-;  this happens in block now
-;  ldy #1
-;  lda stackbase+3,x
-;  sta (SCRATCH)
-;  lda stackbase+4,x
-;  sta (SCRATCH),y
-
   ;; update USE and PREV
   clc
   lda stackbase+1,x
@@ -7450,13 +7442,6 @@ clean
 
 ;; flush a buffer. on entry, the buffer pointer is in SCRATCH.
 flushbuf
-  ;;
-  ;; if so, write it out
-  ;;
-;  lda #"F"
-;  jsr puta
-;  jsr puta
-;  jsr puta
 
   ;; make space on the stack for the sector number
   dex
@@ -7504,8 +7489,6 @@ flushbuf
   adc #0
   sta SCRATCH+3
 
-;  lda #"1"
-;  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7519,8 +7502,6 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
-;  lda #"2"
-;  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7532,18 +7513,12 @@ copyloop
   bne copyloop
 .)
 
-;  lda #"("
-;  jsr puta
   ;; write first sector
   jsr sdsaveblock
-;  lda #")"
-;  jsr puta
 
   ;; copy data for second sector from buffer to I/O space
   inc SCRATCH+3     ; first, bump the source pointer
 
-;  lda #"3"
-;  jsr puta
   ;; copy first 256 bytes
 .(
   ldy #0
@@ -7557,8 +7532,6 @@ copyloop
 
   inc SCRATCH+3     ; move forward by 256 bytes
 
-;  lda #"4"
-;  jsr puta
   ;; copy second 256 bytes
 .(
   ldy #0
@@ -7571,11 +7544,7 @@ copyloop
 .)
 
   ;; write second sector
-;  lda #"("
-;  jsr puta
   jsr sdsavenext
-;  lda #")"
-;  jsr puta
 
   rts
 ;; end of flushbuf
@@ -7804,11 +7773,6 @@ doflush
   sta stackbase+2,x
 
 flushloop
-;  lda #"%"
-;  jsr puta
-;  jsr dup16
-;  jsr print16u
-
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
@@ -7820,14 +7784,10 @@ flushloop
   ora (SCRATCH),y
   beq nextbuffer
 
-;  lda #"?"
-;  jsr puta
   lda (SCRATCH),y   ; test the dirty flag
   and #128
   beq nextbuffer
 
-;  lda #"!"
-;  jsr puta
   jsr flushbuf
 
   ldy #1            ; clear the dirty flag
