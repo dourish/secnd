@@ -1640,6 +1640,7 @@ dodivmod
   sta stackbase+5,x
   lda stackbase+4,x
   sta stackbase+6,x
+drop2cells
   inx               ; drop working values off the stack, leaving
   inx               ; modulos and quotient in the right places
   inx
@@ -1694,7 +1695,9 @@ dodup
   jmp next
 
 dodrop
-  jsr pop16
+drop1cell
+  inx
+  inx
   jmp next
 
 doswap
@@ -1870,9 +1873,10 @@ dodepth
 doemit
   lda stackbase+1,x
   jsr puta
-  inx
-  inx
-  jmp next
+  jmp drop1cell
+;  inx
+;  inx
+;  jmp next
 
 ;;; Implements OVER. We do everything inline here rather than using
 ;;; push and poop.
@@ -1908,10 +1912,10 @@ dorot
   lda stackbase+2,x
   sta stackbase+4,x
 
-  inx               ; clean up
-  inx
-
-  jmp next
+  jmp drop1cell
+;  inx               ; clean up
+;  inx
+;  jmp next
 
 
 ;;; DOLIT is the run-time code for literal values. Read the contents of
@@ -1931,6 +1935,7 @@ dolit
   lda (IP),y
   sta stackbase+2,x
 
+incIPby2
 .(
   clc
   lda IP            ; increment IP to next cell (which stores the value)
@@ -2038,9 +2043,10 @@ dostore
   sta (stackaccess)    ; store at location we popped
   lda stackbase+2,x    ; then for MSB
   sta (stackaccess),y  ; with y=1
-  inx               ; drop the value from the stack
-  inx
-  jmp next
+;  inx               ; drop the value from the stack
+;  inx
+;  jmp next
+  jmp drop1cell
 
 ;;; doplusstore is the code for +!
 doplusstore
@@ -2053,20 +2059,20 @@ doplusstore
   lda stackbase+2,x    ; then for MSB
   adc (stackaccess),y
   sta (stackaccess),y  ; with y=1
-  inx               ; drop the value from the stack
-  inx
-  jmp next
-
+;  inx               ; drop the value from the stack
+;  inx
+;  jmp next
+  jmp drop1cell
 
 ;;; cstore implements "c!" - like store but just one byte (LSB from stack)
 docstore
   jsr pop16         ; put address into stackaccess
   lda stackbase+1,x ; load LSB off stack and
   sta (stackaccess) ; store at location we popped
-  inx               ; drop the value from the stack
-  inx
-  jmp next
-
+;  inx               ; drop the value from the stack
+;  inx
+;  jmp next
+  jmp drop1cell
 
 ;;; Turn an integer count of cells into a count of bytes. Since
 ;;; my cells are two bytes, that means multiplying item on top of
@@ -2238,21 +2244,26 @@ doallot
 ;;; if we were called that way, or will crash things if we weren't,
 ;;; which has the same effect!
 dobye
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda exitmsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
+  lda #<exitmsg
+  sta PRINTVEC
+  lda #>exitmsg
+  sta PRINTVEC+1
+  jsr printvecstr
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda exitmsg,y
+;  beq done
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;done
+;.)
   rts
-.)
 
 ;;; rcopy (for the Forth word "R") -- copy top of R stack onto data stack
 ;;; this code also implements I (since it's the same thing).
@@ -2307,9 +2318,10 @@ dotor
   lda stackbase+1,x
   sta (RP)
   dec RP            ; BUG presumes that RP doesn't roll over page boundary
-  inx
-  inx
-  jmp next
+  jmp drop1cell
+;  inx
+;  inx
+;  jmp next
 
 
 ;; dofromr (for Forth word "R>" -- move from r-stack to top of stack
@@ -2390,7 +2402,6 @@ copynext            ; now copy the rest of the word, backwards
   sta DP+1
  
   jmp next           ; not sure which of these is right...
-  ;jmp interploop    ; in the compiler, we don't execute NEXT
 
 
 ;;; do-semi-colon, ie, tidy up when we're finishing compiling a word
@@ -2516,15 +2527,16 @@ nocompile
   ldy #0
 .(
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
   lda PAD,y
   beq done
-  sta ACIA_DATA
+  jsr puta
+;  sta ACIA_DATA
   iny
-  jmp next_char
+  bra next_char
 done
 .)
 
@@ -2535,14 +2547,16 @@ nointerp
   ;; from a compiled word. So IP points to a counted string. Print
   ;; it, and increment the instruction pointer appropriately.
 
-.(
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda #$20          ; print a space to begin
-  sta ACIA_DATA
-.)
+;.(
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda #$20          ; print a space to begin
+;  sta ACIA_DATA
+;.)
+  lda #$20
+  jsr puta
 
   phx               ; save X, since we're about to use it
   lda (IP)          ; load the string length
@@ -2552,12 +2566,13 @@ wait_txd_empty
   ;; now print X characters 
 .(
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
   lda (IP),y
-  sta ACIA_DATA
+;  sta ACIA_DATA
+  jsr puta
   iny
   dex
   bne next_char
@@ -2757,18 +2772,18 @@ dozerobra
 nonzero
   ;; otherwise we will continue with processing, but first,
   ;; increment IP to skip the branch offset.
-.(
-  clc
-  lda IP
-  adc #2
-  sta IP
-  bcc skipmsb
-  inc IP+1
-skipmsb
-.)
-
-  jmp next          ; all done, proceed to next instruction
-
+;.(
+;  clc
+;  lda IP
+;  adc #2
+;  sta IP
+;  bcc skipmsb
+;  inc IP+1
+;skipmsb
+;.)
+;
+;  jmp next          ; all done, proceed to next instruction
+  jmp incIPby2
 
 ;;; dobranch is used by ELSE; does an immediate branch. So, it's just
 ;;; like 0branch if the top stack value is 0; in fact, 0branch calls
@@ -2833,17 +2848,17 @@ continue
   jsr push16
 
   ;; bump DP by two again (to move to next instruction space)
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc continue
-  inc DP+1
-continue
-.)
-
-  jmp next
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc continue
+;  inc DP+1
+;continue
+;.)
+;  jmp next
+  jmp incDPby2
 
 nocompile
   jmp abortcompile
@@ -3074,15 +3089,17 @@ skipmsb
   sta (DP),y
 
   ;; increment DP again
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc skipmsb
-  inc DP+1
-skipmsb
-.)
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc skipmsb
+;  inc DP+1
+;skipmsb
+;.)
+;  jmp next
+  jmp incDPby2
 
 nocompile
   jmp next
@@ -3268,6 +3285,7 @@ skipmsb
   sta (DP),y
 
   ;; increment DP again
+incDPby2
 .(
   clc
   lda DP
@@ -3279,6 +3297,7 @@ skipmsb
 .)
 
   jmp next
+;  jmp incDPby2
 
 nodocompile
   jmp abortcompile
@@ -3414,17 +3433,18 @@ noloop
   lda RP
   adc #4
   sta RP
-.(
-  clc
-  lda IP
-  adc #2
-  sta IP
-  bcc skipmsb
-  inc IP+1
-skipmsb
-.)
-
-  jmp next
+;.(
+;  clc
+;  lda IP
+;  adc #2
+;  sta IP
+;  bcc skipmsb
+;  inc IP+1
+;skipmsb
+;.)
+;
+;  jmp next
+  jmp incIPby2
 
 
 ;;; Doleave implements the compile-time of LEAVE. It compiles
@@ -3490,18 +3510,19 @@ foundflag
   lda #0
   sta stackbase+2,y
 
-  ;; increment DP to point to next instruction address
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc continue
-  inc DP+1
-continue
-.)
-
-  jmp next
+;  ;; increment DP to point to next instruction address
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc continue
+;  inc DP+1
+;continue
+;.)
+;
+;  jmp next
+  jmp incDPby2
 
 
 ;;; doparenleave is the implementation of (leave), the run-time behavior
@@ -3682,9 +3703,10 @@ doand
   lda stackbase+2,x
   and stackbase+4,x
   sta stackbase+4,x
-  inx
-  inx
-  jmp next
+;  inx
+;  inx
+;  jmp next
+  jmp drop1cell
 
 door
   lda stackbase+1,x
@@ -3693,9 +3715,10 @@ door
   lda stackbase+2,x
   ora stackbase+4,x
   sta stackbase+4,x
-  inx
-  inx
-  jmp next
+;  inx
+;  inx
+;  jmp next
+  jmp drop1cell
 
 doxor  
   lda stackbase+1,x
@@ -3704,9 +3727,10 @@ doxor
   lda stackbase+2,x
   eor stackbase+4,x
   sta stackbase+4,x
-  inx
-  inx
-  jmp next
+;  inx
+;  inx
+;  jmp next
+  jmp drop1cell
 
 
 ;;; implements 0=. Faster than "0 =" and works in place.
@@ -3832,18 +3856,19 @@ continue
   stz stackaccess+1
   jsr push16
 
-  ;; increment DP once more
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc continue
-  inc DP+1
-continue
-.)
-
-  jmp next
+  jmp incDPby2
+;  ;; increment DP once more
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc continue
+;  inc DP+1
+;continue
+;.)
+;
+;  jmp next
 
 
 ;;; compile-time behaviour for repeat is to fix up any stacked
@@ -3934,17 +3959,18 @@ skipmsb
   sta (DP),y
 
   ;; increment DP again
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc skipmsb
-  inc DP+1
-skipmsb
-.)
-
-  jmp next
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc skipmsb
+;  inc DP+1
+;skipmsb
+;.)
+;
+;  jmp next
+  jmp incDPby2
 
 nocompile
   jmp abortcompile
@@ -3984,18 +4010,20 @@ continue
   lda SCRATCH+1
   sta (DP),y
 
-  ;; increment DP
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc continue
-  inc DP+1
-continue
-.)
+;  ;; increment DP
+;.(
+;  clc
+;  lda DP
+;  adc #2
+;  sta DP
+;  bcc continue
+;  inc DP+1
+;continue
+;.)
+;
+;  jmp next          ; we're done
+  jmp incDPby2
 
-  jmp next          ; we're done
 nocompile
   jmp abortcompile
 .)
@@ -4199,9 +4227,10 @@ donip
   sta stackbase+3,x
   lda stackbase+2,x
   sta stackbase+4,x
-  inx
-  inx
-  jmp next
+;  inx
+;  inx
+;  jmp next
+  jmp drop1cell
 
 ;;; ( x1 x2 -- x2 x1 x2)
 ;;;            +5 +3 +1
@@ -4306,11 +4335,12 @@ doadd32
   lda stackbase+4,x ; byte #4
   adc stackbase+8,x
   sta stackbase+8,x
-  inx               ; drop the upper two-cell number
-  inx
-  inx
-  inx
-  jmp next          ; done
+;  inx               ; drop the upper two-cell number
+;  inx
+;  inx
+;  inx
+;  jmp next          ; done
+  jmp drop2cells
 
 ;;; mixed-length addition. Add a 16-bit wide number on the top of
 ;;; the stack to a 32-bit wide number below it.
@@ -4328,9 +4358,10 @@ doaddmix
   lda stackbase+6,x ; byte #4
   adc #0
   sta stackbase+6,x
-  inx               ; drop the single-length number
-  inx
-  jmp next          ; done
+;  inx               ; drop the single-length number
+;  inx
+;  jmp next          ; done
+  jmp drop1cell
 
 
 ;;; double-length subtraction
@@ -4348,11 +4379,12 @@ dosub32
   lda stackbase+8,x ; byte #4
   sbc stackbase+4,x
   sta stackbase+8,x
-  inx               ; drop the upper two-cell number
-  inx
-  inx
-  inx
-  jmp next          ; done
+;  inx               ; drop the upper two-cell number
+;  inx
+;  inx
+;  inx
+;  jmp next          ; done
+  jmp drop2cells
 
 donegate32
   clc
@@ -5031,11 +5063,12 @@ do2dup
   jmp next
 
 do2drop
-  inx
-  inx
-  inx
-  inx
-  jmp next
+;  inx
+;  inx
+;  inx
+;  inx
+;  jmp next
+  jmp drop2cells
 
 do2over
   dex
@@ -5119,13 +5152,14 @@ startinterp
   ldy #0
 .(
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
   lda greeting,y
   beq interploop
-  sta ACIA_DATA
+  jsr puta
+;  sta ACIA_DATA
   iny
   jmp next_char
 .)
@@ -5310,24 +5344,27 @@ nointerpret
   ;; print an error, in three stages. first, a space; then, the
   ;; undefined word; finally, the error message.
 
-.(
-wait_txd_empty3
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty3
+;.(
+;wait_txd_empty3
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty3
+;  lda #$20
+;  sta ACIA_DATA
+;.)
   lda #$20
-  sta ACIA_DATA
-.)
+  jsr puta
 
   ldy #1
 .(
 next_char
-wait_txd_empty3
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty3
+;wait_txd_empty3
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty3
   lda WORD,y
-  sta ACIA_DATA
+  jsr puta
+;  sta ACIA_DATA
   iny
   cpy WORD
   bcc next_char
@@ -5783,13 +5820,14 @@ loop
   ldy #0
 .(
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
   lda initializedmsg,y
   beq done
-  sta ACIA_DATA
+;  sta ACIA_DATA
+  jsr puta
   iny
   jmp next_char
 done
@@ -5798,12 +5836,13 @@ done
 .(
   ldy #0
 next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
   lda MBR_LABEL,y
-  sta ACIA_DATA
+;  sta ACIA_DATA
+  jsr puta
   iny
   cpy #11
   bne next_char
@@ -6445,20 +6484,25 @@ dodir
 
 header
   jsr crlf
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda dirofmsg,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
-.)
+;  ldy #0
+;.(
+;next_char
+;wait_txd_empty  
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+;  lda dirofmsg,y
+;  beq done
+;  sta ACIA_DATA
+;  iny
+;  jmp next_char
+;done
+;.)
+  lda #<dirofmsg
+  sta PRINTVEC
+  lda #>dirofmsg
+  sta PRINTVEC+1
+  jsr printvecstr
 
   ldy #0
 .(
@@ -8014,11 +8058,12 @@ editloop
   dec             ; subtract 1 (to turn it into a 0-ranged value)
   asl             ; shift to multiply by two
   tax             ; that's an offset, so put it in X
-  lda table,x     ; look up the table value at X
-  sta jmpvec      ; and store it in jmpvec
-  lda table+1,x
-  sta jmpvec+1
-  jmp (jmpvec)    ; jump to the address
+;  lda table,x     ; look up the table value at X
+;  sta jmpvec      ; and store it in jmpvec
+;  lda table+1,x
+;  sta jmpvec+1
+;  jmp (jmpvec)    ; jump to the address
+  jmp (table,x)
 
   bra editloop    ; shouldn't need this but included for safety
 
@@ -8854,24 +8899,10 @@ done
 
 
 crlf
-  pha
-.(
-wait_txd_empty
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-.)
-  lda #$0d
-  sta ACIA_DATA
-.(
-wait_txd_empty
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-.)
-  lda #$0a
-  sta ACIA_DATA
-  pla
+  lda #13
+  jsr puta
+  lda #10
+  jsr puta
   rts
 
 

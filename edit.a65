@@ -141,11 +141,12 @@ editloop
   dec             ; subtract 1 (to turn it into a 0-ranged value)
   asl             ; shift to multiply by two
   tax             ; that's an offset, so put it in X
-  lda table,x     ; look up the table value at X
-  sta jmpvec      ; and store it in jmpvec
-  lda table+1,x
-  sta jmpvec+1
-  jmp (jmpvec)    ; jump to the address
+;  lda table,x     ; look up the table value at X
+;  sta jmpvec      ; and store it in jmpvec
+;  lda table+1,x
+;  sta jmpvec+1
+;  jmp (jmpvec)    ; jump to the address
+  jmp (table,x)
 
   bra editloop    ; shouldn't need this but included for safety
 
