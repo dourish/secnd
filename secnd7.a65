@@ -1197,93 +1197,93 @@ d121link
 d121code
   .word domount
 
-d122entry
-  .byte 6
-  .byte "sendff"
-d122link
-  .word d121entry
-d122code
-  .word dosendff
-
-d123entry
-  .byte 4
-  .byte "cmd8"
-d123link
-  .word d122entry
-d123code
-  .word docmd8
-
-d124entry
-  .byte 6
-  .byte "acmd41"
-d124link
-  .word d123entry
-d124code
-  .word doacmd41
-
-d125entry
-  .byte 5
-  .byte "cmd55"
-d125link
-  .word d124entry
-d125code
-  .word docmd55
-
-d126entry
-  .byte 4
-  .byte "cmd0"
-d126link
-  .word d125entry
-d126code
-  .word docmd0
-
-d127entry
-  .byte 5
-  .byte "cmd58"
-d127link
-  .word d126entry
-d127code
-  .word docmd58
-
-d128entry
-  .byte 5
-  .byte "cmd17"
-d128link
-  .word d127entry
-d128code
-  .word docmd17
-
-d129entry
-  .byte 9
-  .byte "loadblock"
-d129link
-  .word d128entry
-loadblockcode
-d129code
-  .word doloadblock
-
-d130entry
-  .byte 9
-  .byte "dumpblock"
-d130link
-  .word d129entry
-d130code
-  .word dolist
-d130param
-  .word loadblockcode
-  .word crcode
-  .word dolitcode
-  .word 31744
-  .word dolitcode
-  .word 240
-  .word dumpcode
-  .word exitcode
+;d122entry
+;  .byte 6
+;  .byte "sendff"
+;d122link
+;  .word d121entry
+;d122code
+;  .word dosendff
+;
+;d123entry
+;  .byte 4
+;  .byte "cmd8"
+;d123link
+;  .word d122entry
+;d123code
+;  .word docmd8
+;
+;d124entry
+;  .byte 6
+;  .byte "acmd41"
+;d124link
+;  .word d123entry
+;d124code
+;  .word doacmd41
+;
+;d125entry
+;  .byte 5
+;  .byte "cmd55"
+;d125link
+;  .word d124entry
+;d125code
+;  .word docmd55
+;
+;d126entry
+;  .byte 4
+;  .byte "cmd0"
+;d126link
+;  .word d125entry
+;d126code
+;  .word docmd0
+;
+;d127entry
+;  .byte 5
+;  .byte "cmd58"
+;d127link
+;  .word d126entry
+;d127code
+;  .word docmd58
+;
+;d128entry
+;  .byte 5
+;  .byte "cmd17"
+;d128link
+;  .word d127entry
+;d128code
+;  .word docmd17
+;
+;d129entry
+;  .byte 9
+;  .byte "loadblock"
+;d129link
+;  .word d128entry
+;loadblockcode
+;d129code
+;  .word doloadblock
+;
+;d130entry
+;  .byte 9
+;  .byte "dumpblock"
+;d130link
+;  .word d129entry
+;d130code
+;  .word dolist
+;d130param
+;  .word loadblockcode
+;  .word crcode
+;  .word dolitcode
+;  .word 31744
+;  .word dolitcode
+;  .word 240
+;  .word dumpcode
+;  .word exitcode
 
 d131entry
   .byte 3
   .byte "dir"
 d131link
-  .word d130entry
+  .word d121entry
 d131code
   .word dodir
 
@@ -1295,19 +1295,19 @@ d132link
 d132code
   .word doshow
 
-d133entry
-  .byte 7
-  .byte "flookup"
-d133link
-  .word d132entry
-d133code
-  .word doflookup
+;d133entry
+;  .byte 7
+;  .byte "flookup"
+;d133link
+;  .word d132entry
+;d133code
+;  .word doflookup
 
 d134entry
   .byte 5
   .byte "fload"
 d134link
-  .word d133entry
+  .word d132entry
 d134code
 dofloadcode
   .word dofload
@@ -1326,19 +1326,19 @@ d135param
   .word docloadcode
   .word exitcode
 
-d136entry
-  .byte 9
-  .byte "saveblock"
-d136link
-  .word d135entry
-d136code
-  .word dosaveblock
+;d136entry
+;  .byte 9
+;  .byte "saveblock"
+;d136link
+;  .word d135entry
+;d136code
+;  .word dosaveblock
 
 d137entry
   .byte 5
   .byte "using"
 d137link
-  .word d136entry
+  .word d135entry
 d137code
   .word dousing
 
@@ -1430,6 +1430,7 @@ d148link
 d148code
   .word dospat
 
+dtop
 d149entry
   .byte 2
   .byte ";s"
@@ -1438,14 +1439,6 @@ d149link
 d149code
   .word dosemics
 
-dtop
-d150entry
-  .byte 7
-  .byte "convert"
-d150link
-  .word d149entry
-d150code
-  .word doconvert
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5717,14 +5710,14 @@ dosemics
   stz TPTR
   jmp next
 
-doconvert
-  jsr buffersub
-  lda stackbase+1,x
-  sta TEXTBASE
-  lda stackbase+2,x
-  sta TEXTBASE+1
-  jsr nulltospace
-  jmp next
+;doconvert
+;  jsr buffersub
+;  lda stackbase+1,x
+;  sta TEXTBASE
+;  lda stackbase+2,x
+;  sta TEXTBASE+1
+;  jsr nulltospace
+;  jmp next
 
 
 
@@ -5947,38 +5940,38 @@ sendff
   rts
 
 ;; the forth word version
-dosendff
-  jsr sendff
-  jmp next
+;dosendff
+;  jsr sendff
+;  jmp next
 
 ;; forth word version for cmd8
-docmd8
-.(
-  jsr sendff
-  jsr cmd8
-
-  ;; if any bit other that the low order bit is set
-  ;; on the response, then return that.
-  lda SCRATCH
-  and #254
-  beq returndata
-
-  ;; we got a signal of an illegal command. return it
-  lda SCRATCH
-  sta stackaccess
-  stz stackaccess+1
-  bra end
-
-returndata
-  ;; push lower 16 bits of what we get back onto the stack
-  lda SCRATCH+4
-  sta stackaccess
-  lda SCRATCH+3
-  sta stackaccess+1
-end
-  jsr push16
-  jmp next
-.)
+;docmd8
+;.(
+;  jsr sendff
+;  jsr cmd8
+;
+;  ;; if any bit other that the low order bit is set
+;  ;; on the response, then return that.
+;  lda SCRATCH
+;  and #254
+;  beq returndata
+;
+;  ;; we got a signal of an illegal command. return it
+;  lda SCRATCH
+;  sta stackaccess
+;  stz stackaccess+1
+;  bra end
+;
+;returndata
+;  ;; push lower 16 bits of what we get back onto the stack
+;  lda SCRATCH+4
+;  sta stackaccess
+;  lda SCRATCH+3
+;  sta stackaccess+1
+;end
+;  jsr push16
+;  jmp next
+;.)
 
 cmd8
   ;; set cs to 0
@@ -6006,25 +5999,25 @@ cmd8
 
   rts
 
-;; do cmd58, which gets a long response
-docmd58
-  jsr sendff
-  jsr cmd58
-  lda SCRATCH+1
-  sta stackaccess+1
-  lda SCRATCH+2
-  sta stackaccess
-  jsr push16
-  lda SCRATCH+3
-  sta stackaccess+1
-  lda SCRATCH+4
-  sta stackaccess
-  jsr push16
-  lda SCRATCH
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jmp next
+;;; do cmd58, which gets a long response
+;docmd58
+;  jsr sendff
+;  jsr cmd58
+;  lda SCRATCH+1
+;  sta stackaccess+1
+;  lda SCRATCH+2
+;  sta stackaccess
+;  jsr push16
+;  lda SCRATCH+3
+;  sta stackaccess+1
+;  lda SCRATCH+4
+;  sta stackaccess
+;  jsr push16
+;  lda SCRATCH
+;  sta stackaccess
+;  stz stackaccess+1
+;  jsr push16
+;  jmp next
 
 cmd58
   ;; set cs to 0
@@ -6052,16 +6045,16 @@ cmd58
 
 
 
-;; do cmd55... that will allow acmd 41...
-docmd55
-.(
-  jsr sendff
-  jsr cmd55
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jmp next
-.)
+;;; do cmd55... that will allow acmd 41...
+;docmd55
+;.(
+;  jsr sendff
+;  jsr cmd55
+;  sta stackaccess
+;  stz stackaccess+1
+;  jsr push16
+;  jmp next
+;.)
 
 cmd55
   ;; set cs to 0
@@ -6086,15 +6079,15 @@ cmd55
   rts
 
   
-doacmd41
-.(
-  jsr sendff
-  jsr acmd41
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jmp next
-.)
+;doacmd41
+;.(
+;  jsr sendff
+;  jsr acmd41
+;  sta stackaccess
+;  stz stackaccess+1
+;  jsr push16
+;  jmp next
+;.)
 
 acmd41
   ;; set cs to 0
@@ -6120,13 +6113,13 @@ acmd41
   sty PORTB
   rts
 
-docmd17
-  jsr sendff
-  jsr cmd17
-  sta stackaccess
-  stz stackaccess+1
-  jsr push16
-  jmp next  
+;docmd17
+;  jsr sendff
+;  jsr cmd17
+;  sta stackaccess
+;  stz stackaccess+1
+;  jsr push16
+;  jmp next  
 
 cmd17
   ;; set cs to 0
@@ -6148,10 +6141,10 @@ cmd17
   jsr getresponse
   rts
 
-dogetblock
-  jsr gettoken
-  jsr getblock
-  jmp next
+;dogetblock
+;  jsr gettoken
+;  jsr getblock
+;  jmp next
 
 gettoken
   ; listen until we hear %11111110 (254/$FE)
@@ -6191,23 +6184,23 @@ loop
   rts
 
 
-doloadblock
-.(
-  jsr sdloadblock
-  bcc done
-  jmp abortdiskerror
-done
-  jmp next
-.)
-
-dosaveblock
-.(
-  jsr sdsaveblock
-  bcc done
-  jmp abortdiskerror
-done
-  jmp next
-.)
+;doloadblock
+;.(
+;  jsr sdloadblock
+;  bcc done
+;  jmp abortdiskerror
+;done
+;  jmp next
+;.)
+;
+;dosaveblock
+;.(
+;  jsr sdsaveblock
+;  bcc done
+;  jmp abortdiskerror
+;done
+;  jmp next
+;.)
 
 
 ;;; Load block specified by double on the stack, translating between
@@ -7048,16 +7041,16 @@ done
   rts
 
 
-doflookup
-  jsr readnext      ; get next word and put it into input buffer
-  jsr matchname     ; see what we get
-  lda SCRATCH+6
-  sta stackaccess
-  lda SCRATCH+7
-  sta stackaccess+1
-  jsr push16
-  jsr print16u
-  jmp next
+;doflookup
+;  jsr readnext      ; get next word and put it into input buffer
+;  jsr matchname     ; see what we get
+;  lda SCRATCH+6
+;  sta stackaccess
+;  lda SCRATCH+7
+;  sta stackaccess+1
+;  jsr push16
+;  jsr print16u
+;  jmp next
 
 
 ;; take filename in WORD, look up in root directory, return pointer
@@ -8449,7 +8442,7 @@ clearloop
 paintnext
   lda row
   inc
-  cmp #MAXROW
+  cmp #NROWS
   beq donerepaint
   sta row
   stz col
@@ -8516,7 +8509,7 @@ paintloop
   jsr paintrow
   lda row
   inc
-  cmp #MAXROW
+  cmp #NROWS
   beq endpaint
   sta row
   clc
@@ -8772,7 +8765,7 @@ midline
 ;; in an ugly hack, convert nulls to spaces on exit
 endedit
   jsr nulltospace
-  lda #$15
+  lda #$12
   sta row
   lda #$00
   sta col
