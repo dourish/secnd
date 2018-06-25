@@ -1,4 +1,6 @@
-: space 32 emit ;
+32 constant bl
+
+: space bl emit ;
 : spaces 0 do space loop ;
 : clear 74 50 91 27 emit emit emit emit ;
 : home 72 91 27 emit emit emit ;
@@ -20,4 +22,7 @@
 32769 constant porta
 32770 constant ddrb
 32771 constant ddra
+
+: >body 2+ ;
+
 
