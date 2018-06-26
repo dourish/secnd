@@ -810,11 +810,11 @@ d73code
   .word dosquote
 
 d74entry
-  .byte 4
-  .byte "(s", $22, ")"
+  .byte 8
+  .byte "sliteral"
 d74link
   .word d73entry
-parsquotecode
+sliteralcode
 d74code
   .word dostrlit
 
@@ -1431,7 +1431,6 @@ d148link
 d148code
   .word dospat
 
-dtop
 d149entry
   .byte 2
   .byte ";s"
@@ -1440,6 +1439,54 @@ d149link
 d149code
   .word dosemics
 
+d150entry
+  .byte 9
+  .byte "-trailing"
+d150link
+  .word d149entry
+d150code
+  .word dodashtrail
+
+d151entry
+  .byte 7
+  .byte "/string"
+d151link
+  .word d150entry
+d151code
+  .word doslashstr
+
+d152entry
+  .byte 7
+  .byte "compare"
+d152link
+  .word d151entry
+d152code
+  .word docompare
+
+d153entry
+  .byte 4
+  .byte "move"
+d153link
+  .word d152entry
+d153code
+  .word domove
+
+d154entry
+  .byte 6
+  .byte "moveup"
+d154link
+  .word d153entry
+d154code
+  .word domoveup
+
+dtop
+d155entry
+  .byte 8
+  .byte "movedown"
+d155link
+  .word d154entry
+d155code
+  .word domovedown
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1943,16 +1990,24 @@ continue
   jmp next
   
 
-;;; dostrlit is the run-time behaviour for S" (ie, string literal). Loads
-;;; string address and string length onto the stack.
+;;; dostrlit is the run-time behaviour for S" (ie, string literal).
+;;; However, strings are stored as counted-strings but will be processed
+;;; as string-plus-count so we need to convert (basically by adding
+;;; one to the strong address)
 dostrlit
-  lda IP           ; IP points to the string address
-  sta stackaccess  ; so store in stackaccess
+  lda (IP)        ; load the string count
+  pha             ; cache it for the moment
+
+  clc
+  lda IP           ; IP points to the address of counted string
+  adc #1           ; so add one
+  sta stackaccess  ; before store in stackaccess
   lda IP+1
+  adc #0
   sta stackaccess+1
   jsr push16       ; add to the data stack
   
-  lda (IP)         ; load the length count
+  pla              ; recover the length count
   sta stackaccess
   stz stackaccess+1 ; max 255 characters in a string
   jsr push16
@@ -2596,9 +2651,9 @@ continue
 ;;; and an inline string constant. (do-s-quote)
 dosquote
   ldy #1
-  lda #<parsquotecode
+  lda #<sliteralcode
   sta (DP)
-  lda #>parsquotecode
+  lda #>sliteralcode
   sta (DP),y
 
   ;; then update DP by 2, to account for that word
@@ -2615,9 +2670,8 @@ continue
   jsr assemblestr   ; read and assemble string from input
 
   ;; now we copy it into space where we are comping, pointed to by DP.
-  ;; BUG this code is shared with dodotqu, so factor it out. I think
-  ;; it is technically $,"... yeah?
-  lda PAD           ; first, copy the length
+  ;; BUG this is technically $,"... yeah?
+  ldy PAD           ; first, copy the length
   sta (DP)
 
 .(
@@ -2732,23 +2786,19 @@ continue
 ;;; stack and prints the number of characters indicated in the count.
 dotype
   jsr pop16
-  ldy stackaccess   ; put the count in Y
+  lda stackaccess
+  sta SCRATCH       ; put count in SCRATCH
   jsr pop16         ; fetch the string address
-  cpy #0
+  lda SCRATCH
   beq endtype       ; stop now if the count was 0
 
-  phx               ; save X temporarily
-
-  tya               ; move Y into X (via A)
-  tax
-  ldy #1            ; start Y at 1 (to skip count byte)
+  ldy #0
 typenext
   lda (stackaccess),y
   jsr puta
   iny
-  dex
+  cpy SCRATCH
   bne typenext
-  plx               ; restore X
 
 endtype
   jmp next
@@ -5721,7 +5771,333 @@ dosemics
 ;  jmp next
 
 
+;;; implements MOVE
+;;; ( srcaddr destaddr u )
+;;; if dest > src, then copy down, otherwise copy up; this should
+;;; conflicts in case of overlapping segments.
+domove
+  lda stackbase+1,x
+  sta SCRATCH+4
+  lda stackbase+2,x
+  sta SCRATCH+5
+  lda stackbase+3,x
+  sta SCRATCH+2
+  lda stackbase+4,x
+  sta SCRATCH+3
+  lda stackbase+5,x
+  sta SCRATCH
+  lda stackbase+6,x
+  sta SCRATCH+1
+  jsr moveupsub
 
+  sec
+  lda stackbase+3,x
+  sbc stackbase+5,x
+  lda stackbase+4,x
+  sbc stackbase+6,x
+  bvc there
+  eor #$80          ; what is this FOR? to do with BPL somehow...
+there
+  bpl here
+  ; dest > src
+  jsr movedownsub
+  jmp next
+here
+  ; dest <= src
+  jsr moveupsub
+  jmp next
+
+
+domoveup
+  lda stackbase+1,x
+  sta SCRATCH+4
+  lda stackbase+2,x
+  sta SCRATCH+5
+  lda stackbase+3,x
+  sta SCRATCH+2
+  lda stackbase+4,x
+  sta SCRATCH+3
+  lda stackbase+5,x
+  sta SCRATCH
+  lda stackbase+6,x
+  sta SCRATCH+1
+  jsr moveupsub
+  jmp next
+
+domovedown
+  lda stackbase+1,x
+  sta SCRATCH+4
+  lda stackbase+2,x
+  sta SCRATCH+5
+  lda stackbase+3,x
+  sta SCRATCH+2
+  lda stackbase+4,x
+  sta SCRATCH+3
+  lda stackbase+5,x
+  sta SCRATCH
+  lda stackbase+6,x
+  sta SCRATCH+1
+  jsr movedownsub
+  jmp next
+
+
+;;; move memory from source to destination, copying from low to high
+;;; on input, SCRATCH+0/1 are source address, SCRATCH+2/3 are destination
+;;; address, and SCRATCH+4/5 are byte count
+moveupsub
+.(
+  phx
+  ldy #0
+  ldx SCRATCH+5     ; X is # full pages to move
+  beq lastblock
+pageloop
+  lda (SCRATCH),y
+  sta (SCRATCH+2),y
+  iny
+  bne pageloop
+  inc SCRATCH+1
+  inc SCRATCH+3
+  dex
+  bne pageloop
+lastblock
+  cpy SCRATCH+4     ; we know Y=0 at this point
+  beq finish
+  lda (SCRATCH),y
+  sta (SCRATCH+2),y
+  iny
+  bra lastblock
+finish
+  plx
+  rts
+.)
+
+;;; move memory from source to destination, copying from high to low
+;;; on input, SCRATCH+0/1 are source address, SCRATCH+2/3 are destination
+;;; address, and SCRATCH+4/5 are byte count
+;;; BUG there must be a better way to do this! Perhaps the other way
+;;; around -- start with the less-than-page segment and then do
+;;; full pages?
+movedownsub
+.(
+  phx
+
+  clc               ; update source pointer to END of block
+  lda SCRATCH
+  adc SCRATCH+4
+  sta SCRATCH
+  lda SCRATCH+1
+  adc SCRATCH+5
+  sta SCRATCH+1
+  dec SCRATCH+1     ; move back by one page
+
+  clc               ; now do same with destination pointer
+  lda SCRATCH+2
+  adc SCRATCH+4
+  sta SCRATCH+2
+  lda SCRATCH+3
+  adc SCRATCH+5
+  sta SCRATCH+3
+  dec SCRATCH+3
+
+  ldx SCRATCH+5     ; this is the number of full pages to copy
+  beq lastblock
+movepage
+  ldy #255
+innerloop
+  lda (SCRATCH),y
+  sta (SCRATCH+2),y
+  dey
+  bne innerloop
+  lda (SCRATCH)     ; copy the zero-byte
+  sta (SCRATCH+2)
+  dec SCRATCH+1     ; decrement both pointers by one page
+  dec SCRATCH+3
+  dex               ; decrement page-copy count by one
+  bne movepage
+lastblock
+  ldy #255
+  ldx SCRATCH+4
+  beq done
+lastloop
+  lda (SCRATCH),y
+  sta (SCRATCH+2),y
+  dex
+  beq done
+  dey
+  bne lastloop
+done
+  plx
+  rts  
+.)
+
+;;; implements -TRAILING (removes trailing spaces from string)
+;;; ( c-addr u1 -- c-addr u2 )
+dodashtrail
+.(
+  ;; if u1 is zero, we're done
+  lda stackbase+1,x
+  ora stackbase+2,x
+  beq finish
+setup
+  sec               ; set up SCRATCH+4/5 as sentinel value (c-addr - 1)
+  lda stackbase+3,x
+  sbc #1
+  sta SCRATCH+4
+  lda stackbase+4,x
+  sbc #0
+  sta SCRATCH+5
+  clc               ; now add string count to that
+  lda SCRATCH+4     ; creating pointer to end of string
+  adc stackbase+1,x ; and store at SCRATCH and SCRACH+1
+  sta SCRATCH
+  lda SCRATCH+5
+  adc stackbase+2,x
+  sta SCRATCH+1
+  stz SCRATCH+2     ; finally, use SCRATCH+2/3 as count of spaces
+  stz SCRATCH+3
+loop
+  lda (SCRATCH)     ; look at current character
+  cmp #32           ; is it a space?
+  bne nospace
+  clc               ; yes, so bump counter
+  lda SCRATCH+2
+  adc #1
+  sta SCRATCH+2
+  bcc doneadd
+  inc SCRATCH+3
+doneadd
+  sec               ; dec pointer by one byte
+  lda SCRATCH
+  sbc #1
+  sta SCRATCH
+  lda SCRATCH+1
+  sbc #0
+  sta SCRATCH+1
+  lda SCRATCH       ; compare pointer to start-of-string ptr
+  cmp SCRATCH+4
+  bne loop          ; loop if LSB not equal to sentinel
+  lda SCRATCH+1
+  cmp SCRATCH+5
+  bne loop          ; loop if MBS not equal
+nospace
+  ;; we get here if (1) we have encountered a non-space, or (2) we
+  ;; have exhausted the string. either way, the behaviour is the
+  ;; same; subtract the counter from the length value on the
+  ;; stack.
+  sec
+  lda stackbase+1,x
+  sbc SCRATCH+2
+  sta stackbase+1,x
+  lda stackbase+2,x
+  sbc SCRATCH+3
+  sta stackbase+2,x
+finish
+  jmp next
+.)
+
+
+;;; implement /STRING
+;;; adjust left-hand of string by n chars
+;;; ( c-addr1 u1 n -- c-addr2 u2 )
+doslashstr
+  ;; first, substract n from u1
+  sec
+  lda stackbase+3,x
+  sbc stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+4,x
+  sbc stackbase+2,x
+  sta stackbase+4,x
+  ;; then, add n to c-addr2
+  clc
+  lda stackbase+5,x
+  adc stackbase+1,x
+  sta stackbase+5,x
+  lda stackbase+6,x
+  adc stackbase+2,x
+  sta stackbase+6,x
+  ;; drop n
+  inx
+  inx
+  ;; done
+  jmp next
+
+
+;;; implement COMPARE
+;;; ( c-addr1 u1 c-addr2 u2 -- n )
+;;; BUG limits string length to 255
+docompare
+.(
+  lda stackbase+7,x
+  sta SCRATCH
+  lda stackbase+8,x
+  sta SCRATCH+1
+  lda stackbase+3,x
+  sta SCRATCH+2
+  lda stackbase+4,x
+  sta SCRATCH+3
+  lda stackbase+1,x
+  sta SCRATCH+4
+  lda stackbase+5,x
+  sta SCRATCH+5
+
+  ldy #0
+loop
+  lda (SCRATCH),y
+  cmp (SCRATCH+2),y
+  bne endmatch
+  iny
+  cpy #0            ; looped around?
+  beq ident
+  ; compare to string lengths
+  cpy SCRATCH+4     ; stackbase+1,x
+  beq hitu2
+  cpy SCRATCH+5     ; stackbase+5,x
+  beq hitu1
+  bra loop
+hitu2
+  cpy SCRATCH+5     ; stackbase+5,x
+  beq ident
+  ;; otherwise, not ident but str2 shorter than str1
+  bra return1
+hitu1
+  cpy SCRATCH+4     ; stackbase+1,x
+  beq ident
+  ;; otherwise, not ident but str1 shorter than str2
+  bra returnm1
+endmatch
+  bmi returnm1      ; minus if c2 > c1 so return -1
+  bra return1       ; otherwise c1 < c2 so return 1
+ident
+return0
+  clc               ; drop three cells from the stack
+  txa
+  adc #6
+  tax
+  stz stackbase+1,x
+  stz stackbase+2,x
+  jmp next
+return1
+  clc               ; drop three cells from the stack
+  txa
+  adc #6
+  tax
+  lda #1
+  sta stackbase+1,x
+  stz stackbase+2,x
+  jmp next
+returnm1
+  clc               ; drop three cells from the stack
+  txa
+  adc #6
+  tax
+  lda #$ff
+  sta stackbase+1,x
+  sta stackbase+2,x
+  jmp next
+.)
+  
+  
 ;;;
 ;;; *** SD CARD SUPPORT
 ;;;
