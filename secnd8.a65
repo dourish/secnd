@@ -1472,8 +1472,8 @@ d153code
   .word domove
 
 d154entry
-  .byte 6
-  .byte "moveup"
+  .byte 5
+  .byte "cmove"
 d154link
   .word d153entry
 d154code
@@ -1481,8 +1481,8 @@ d154code
 
 dtop
 d155entry
-  .byte 8
-  .byte "movedown"
+  .byte 6
+  .byte "cmove>"
 d155link
   .word d154entry
 d155code
@@ -5773,22 +5773,10 @@ dosemics
 
 ;;; implements MOVE
 ;;; ( srcaddr destaddr u )
-;;; if dest > src, then copy down, otherwise copy up; this should
-;;; conflicts in case of overlapping segments.
+;;; if dest > src, then high-to-low, otherwise copy low-to-high.
+;;; this should avoid conflicts in case of overlapping segments.
 domove
-  lda stackbase+1,x
-  sta SCRATCH+4
-  lda stackbase+2,x
-  sta SCRATCH+5
-  lda stackbase+3,x
-  sta SCRATCH+2
-  lda stackbase+4,x
-  sta SCRATCH+3
-  lda stackbase+5,x
-  sta SCRATCH
-  lda stackbase+6,x
-  sta SCRATCH+1
-  jsr moveupsub
+  jsr movesetup
 
   sec
   lda stackbase+3,x
@@ -5799,32 +5787,26 @@ domove
   eor #$80          ; what is this FOR? to do with BPL somehow...
 there
   bpl here
-  ; dest > src
-  jsr movedownsub
+  ; dest < src
+  jsr moveupsub
   jmp next
 here
-  ; dest <= src
-  jsr moveupsub
+  ; dest > src
+  jsr movedownsub
   jmp next
 
 
 domoveup
-  lda stackbase+1,x
-  sta SCRATCH+4
-  lda stackbase+2,x
-  sta SCRATCH+5
-  lda stackbase+3,x
-  sta SCRATCH+2
-  lda stackbase+4,x
-  sta SCRATCH+3
-  lda stackbase+5,x
-  sta SCRATCH
-  lda stackbase+6,x
-  sta SCRATCH+1
+  jsr movesetup
   jsr moveupsub
   jmp next
 
 domovedown
+  jsr movesetup
+  jsr movedownsub
+  jmp next
+
+movesetup
   lda stackbase+1,x
   sta SCRATCH+4
   lda stackbase+2,x
@@ -5837,9 +5819,7 @@ domovedown
   sta SCRATCH
   lda stackbase+6,x
   sta SCRATCH+1
-  jsr movedownsub
-  jmp next
-
+  rts
 
 ;;; move memory from source to destination, copying from low to high
 ;;; on input, SCRATCH+0/1 are source address, SCRATCH+2/3 are destination
