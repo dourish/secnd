@@ -1479,7 +1479,6 @@ d154link
 d154code
   .word domoveup
 
-dtop
 d155entry
   .byte 6
   .byte "cmove>"
@@ -1487,6 +1486,16 @@ d155link
   .word d154entry
 d155code
   .word domovedown
+
+dtop
+d156entry
+  .byte 6
+  .byte "accept"
+d156link
+  .word d155entry
+d156code
+  .word doaccept
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2753,7 +2762,20 @@ skipmsb
   dec               ; subtract one (don't count the count byte itself)
   sta PAD
 
-  bra continue
+  ;; if the word ended with a quote mark, then remove it and
+  ;; finish. otherwise, loop
+  ldy WORD
+  lda WORD,y
+  cmp #$22
+  bne continue
+
+  sec               ; move PADPTR back by one character
+  lda PADPTR        ; to remove the quote mark
+  sbc #1
+  sta PADPTR
+  lda PADPTR+1
+  sbc #0
+  sta PADPTR+1
 .)
 finished
   ;; add a null at the end of the string
@@ -2802,6 +2824,73 @@ typenext
 
 endtype
   jmp next
+
+
+;;; doaccept implements ACCEPT
+;;; ( caddr n1 -- n2 )
+;;; n1 is the maximum number of characters to read; n2 is the number
+;;; actually read
+;;; BUG fix this wrt readtermline...
+doaccept
+.(
+  lda stackbase+3,x
+  sta SCRATCH
+  lda stackbase+4,x
+  sta SCRATCH+1
+nextchar
+  jsr readchar
+  cmp #$08
+  beq backspace
+  cmp #$0D
+  beq newline
+  sta (SCRATCH)
+  jsr puta
+  clc
+  lda SCRATCH
+  adc #1
+  sta SCRATCH
+  bcc doneadd
+  inc SCRATCH+1
+doneadd
+  lda SCRATCH       ; if char limit not reached, then
+  cmp stackbase+1,x ; branch back to fetch next character
+  bne nextchar
+  lda SCRATCH+1
+  cmp stackbase+2,x
+  bne nextchar
+  ;; otherwise, hit limit so fall through
+newline
+  jsr swap16        ; swap parameters
+  sec               ; calculate length of string read, and store it
+  lda SCRATCH       ; over input length as return value on stack
+  sbc stackbase+1,x
+  sta stackbase+3,x
+  lda SCRATCH+1
+  sbc stackbase+4,x
+  sta stackbase+2,x
+  inx               ; clean up the stack
+  inx
+  jmp next
+backspace
+  lda SCRATCH       ; are we still at the start of the string?
+  cmp stackbase+3,x
+  bne continue
+  lda SCRATCH+1
+  cmp stackbase+4,x
+  beq nextchar      ; if so, ignore the backspace
+continue
+  lda #$08
+  jsr puta
+  sec
+  lda SCRATCH
+  sbc #1
+  sta SCRATCH
+  lda SCRATCH+1
+  sbc #0
+  sta SCRATCH+1
+  bra nextchar
+.)
+
 
 ;;; 0branch is an internal word used for conditionals. Test top of stack,
 ;;; and if false, add the next parameter (ie instruction offset) to the
@@ -5567,14 +5656,8 @@ doneword
 readtermline
   ldy #0
   stz TCNT          ; reset the counter
-readchar
-.(
-wait_rxd_full    
-  lda ACIA_STATUS
-  and #$08
-  beq wait_rxd_full
-.)
-  lda ACIA_DATA
+readone
+  jsr readchar
   cmp #$08           ; check for backspace
   beq backspace
   cmp #$0D           ; check for newline (carriage return)
@@ -5584,13 +5667,13 @@ wait_rxd_full
   sta INPUT,y        ; track the input
   iny
   jsr puta           ; echo the typed character
-  jmp readchar       ; loop to repeat
+  jmp readone        ; loop to repeat
 backspace
   cpy #0             ; beginning of line?
-  beq readchar
+  beq readone
   dey                ; if not, go back one character
   jsr puta           ; move cursor back
-  jmp readchar
+  jmp readone
 
   ;; this is where we land if the line input has finished
   ;;
@@ -5600,6 +5683,16 @@ doneline
   sty TCNT          ; update character count
   rts
 
+
+readchar
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  rts
 
 ;;; Read a new line into the INPUT buffer, taking our input from
 ;;; an area of memory. This is a bit of a hack, but allows other
