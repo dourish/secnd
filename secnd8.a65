@@ -5892,11 +5892,19 @@ here
 domoveup
   jsr movesetup
   jsr moveupsub
+  clc               ; clean up the stack
+  txa
+  adc #6
+  tax
   jmp next
 
 domovedown
   jsr movesetup
   jsr movedownsub
+  clc               ; clean up the stack
+  txa
+  adc #6
+  tax
   jmp next
 
 movesetup
