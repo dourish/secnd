@@ -1254,15 +1254,15 @@ d121code
 ;d128code
 ;  .word docmd17
 ;
-;d129entry
-;  .byte 9
-;  .byte "loadblock"
-;d129link
-;  .word d128entry
-;loadblockcode
-;d129code
-;  .word doloadblock
-;
+d129entry
+  .byte 9
+  .byte "loadblock"
+d129link
+  .word d121entry
+loadblockcode
+d129code
+  .word doloadblock
+
 ;d130entry
 ;  .byte 9
 ;  .byte "dumpblock"
@@ -1284,7 +1284,7 @@ d131entry
   .byte 3
   .byte "dir"
 d131link
-  .word d121entry
+  .word d129entry
 d131code
   .word dodir
 
@@ -1487,7 +1487,6 @@ d155link
 d155code
   .word domovedown
 
-dtop
 d156entry
   .byte 6
   .byte "accept"
@@ -1495,6 +1494,16 @@ d156link
   .word d155entry
 d156code
   .word doaccept
+
+dtop
+d157entry
+  .byte 5
+  .byte "iobuf"
+d157link
+  .word d156entry
+d157code
+  .word doloadconst
+  .word LBLOCK
 
 
 ;d101entry
@@ -6642,15 +6651,15 @@ loop
   rts
 
 
-;doloadblock
-;.(
-;  jsr sdloadblock
-;  bcc done
-;  jmp abortdiskerror
-;done
-;  jmp next
-;.)
-;
+doloadblock
+.(
+  jsr sdloadblock
+  bcc done
+  jmp abortdiskerror
+done
+  jmp next
+.)
+
 ;dosaveblock
 ;.(
 ;  jsr sdsaveblock
