@@ -97,7 +97,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3200      ; staring address for user code
+USERBASE=$3300      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -4715,6 +4715,50 @@ multmixsub
   stz stackbase+5,x
   stz stackbase+6,x
 
+  stz SCRATCH
+  ;; if n1 is negative, make a note and invert it
+  lda stackbase+8,x
+  bit #128
+  beq checkother
+  eor #$ff
+  sta stackbase+8,x
+  lda stackbase+7,x
+  eor #$ff
+  sta stackbase+7,x ; this and next lda can be eliminated, no? BUG
+  clc
+  lda stackbase+7,x
+  adc #1
+  sta stackbase+7,x
+  lda stackbase+8,x
+  adc #0
+  sta stackbase+8,x
+  inc SCRATCH       ; non-zero indicates we need to invert result
+
+checkother
+  lda stackbase+10,x
+  bit #128
+  beq nextbit
+  eor #$ff
+  sta stackbase+10,x
+  lda stackbase+9,x
+  eor #$ff
+  sta stackbase+9,x ; this and next lda can be eliminated, no? BUG
+  clc
+  lda stackbase+9,x
+  adc #1
+  sta stackbase+9,x
+  lda stackbase+10,x
+  adc #0
+  sta stackbase+10,x
+
+  lda SCRATCH
+  beq setit
+  dec SCRATCH
+  bra nextbit
+setit
+  inc SCRATCH
+
+
   ;; multiplying n1 by n2. n1lsb is stackbase+7,x;
   ;; n1msb is stackbase+8,x; n2lsb is stackbase+9,x; and
   ;; n2msb is stackbase+10,x
@@ -4767,6 +4811,30 @@ done
   txa
   adc #6
   tax
+
+.(
+  ;; finally, if we need to, invert the result
+  lda SCRATCH
+  beq done
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  eor #$ff
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  eor #$ff
+  adc #0
+  sta stackbase+4,x
+done
+.)
   rts
 
 
@@ -4847,7 +4915,7 @@ nextbit
   asl stackbase+7,x
   rol stackbase+8,x
   rol stackbase+9,x
-  rol stackbase+19,x
+  rol stackbase+10,x
   rol stackbase+1,x
   rol stackbase+2,x
   ; is temp larger than/equal to n1?
@@ -4862,12 +4930,12 @@ nextbit
   ; yes so subtract divisor from temp
 subtract
   sec
-  lda stackbase+2,x
-  sbc stackbase+6,x
-  sta stackbase+2,x
   lda stackbase+1,x
   sbc stackbase+5,x
   sta stackbase+1,x
+  lda stackbase+2,x
+  sbc stackbase+6,x
+  sta stackbase+2,x
   ; shift and test
 shift1
   ; shift result one place left, shifting in a 1 at the bottom
@@ -5801,6 +5869,9 @@ dolistword
   lda stackbase+2,x
   sta SCRATCH+1
   stz SCRATCH+2
+  inx               ; clean up stack
+  inx
+
   jsr crlf
 
 startrow
@@ -8439,11 +8510,11 @@ doedit
   sta TEXTBASE
   lda stackbase+2,x
   sta TEXTBASE+1
+  inx               ; clean up the stack
+  inx
   phx
   jsr beginedit
   plx
-  dex
-  dex
   jmp next
 
 beginedit
