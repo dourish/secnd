@@ -1495,7 +1495,6 @@ d156link
 d156code
   .word doaccept
 
-dtop
 d157entry
   .byte 5
   .byte "iobuf"
@@ -1505,6 +1504,23 @@ d157code
   .word doloadconst
   .word LBLOCK
 
+d158entry
+  .byte 12
+  .byte "save-buffers"
+d158link
+  .word d157entry
+d158code
+  .word dosavebufs
+
+dtop
+d159entry
+  .byte 4
+  .byte "base"
+d159link
+  .word d158entry
+d159code
+  .word doloadconst
+  .word USERBASE
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -8339,7 +8355,14 @@ dofirst
 
 ;;; Flush all buffers that are currently marked as dirty. In
 ;;; some Forths, this is called SAVE-BUFFERS
-doflush
+dosavebufs
+  jsr savebufssub
+  jmp next
+
+;;; this is implemented as a subroutine so that it can be called
+;;; from both save-buffers and flush
+savebufssub
+.(
   dex
   dex
   lda #<FIRST
@@ -8347,7 +8370,7 @@ doflush
   lda #>FIRST
   sta stackbase+2,x
 
-flushloop
+bufloop
   lda stackbase+1,x
   sta SCRATCH
   lda stackbase+2,x
@@ -8374,14 +8397,46 @@ nextbuffer
   jsr plusbuf
   lda stackbase+1,x
   cmp #<FIRST
-  bne flushloop
+  bne bufloop
   lda stackbase+2,x
   cmp #>FIRST
-  bne flushloop
+  bne bufloop
 
   inx               ; clean up the stack
   inx
+.)
+  rts
 
+doflush
+  dex
+  dex
+.(
+  jsr savebufssub
+
+  lda #<FIRST
+  sta stackbase+1,x
+  lda #>FIRST
+  sta stackbase+2,x
+bufloop
+  lda stackbase+1,x
+  sta stackaccess
+  lda stackbase+2,x
+  sta stackaccess+1
+  lda #0
+  ldy #1
+  sta (stackaccess)
+  sta (stackaccess),y
+
+  jsr plusbuf
+  lda stackbase+1,x
+  cmp #<FIRST       ; plusbuf loops, so we are done when we
+  bne bufloop       ; return to FIRST
+  lda stackbase+2,x
+  cmp #>FIRST
+  bne bufloop
+.)
+  inx
+  inx
   jmp next
 
 
