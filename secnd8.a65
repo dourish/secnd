@@ -97,7 +97,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3300      ; staring address for user code
+USERBASE=$3400      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -1512,7 +1512,6 @@ d158link
 d158code
   .word dosavebufs
 
-dtop
 d159entry
   .byte 4
   .byte "base"
@@ -1521,6 +1520,25 @@ d159link
 d159code
   .word doloadconst
   .word USERBASE
+
+d160entry
+  .byte 3
+  .byte "ud."
+d160link
+  .word d159entry
+d160code
+  .word doprint32u
+
+dtop
+d161entry
+  .byte 3
+  .byte "um*"
+d161link
+  .word d160entry
+d161code
+  .word doumstar
+
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1737,6 +1755,10 @@ dorprint16
 
 doprint32
   jsr print32s
+  jmp next
+
+doprint32u
+  jsr print32u
   jmp next
 
 dorprint32
@@ -4720,113 +4742,49 @@ domultmix
 
 multmixsub
 .(
-  sec               ; make some working space on the stack
-  txa               ; need six bytes... four for our result and
-  sbc #6            ; two for the expansion of n1
-  tax
-  stz stackbase+1,x ; zero it out
-  stz stackbase+2,x
-  stz stackbase+3,x
-  stz stackbase+4,x
-  stz stackbase+5,x
-  stz stackbase+6,x
 
-  stz SCRATCH
+  lda stackbase+2,x
+  eor stackbase+4,x
+  and #128
+  sta SCRATCH       ; scratch is 0 if numbers have same sign, 128 otherwise
+
   ;; if n1 is negative, make a note and invert it
-  lda stackbase+8,x
+  lda stackbase+2,x
   bit #128
   beq checkother
   eor #$ff
-  sta stackbase+8,x
-  lda stackbase+7,x
+  sta stackbase+2,x
+  lda stackbase+1,x
   eor #$ff
-  sta stackbase+7,x ; this and next lda can be eliminated, no? BUG
+  sta stackbase+1,x ; this and next lda can be eliminated, no? BUG
   clc
-  lda stackbase+7,x
+  lda stackbase+1,x
   adc #1
-  sta stackbase+7,x
-  lda stackbase+8,x
+  sta stackbase+1,x
+  lda stackbase+2,x
   adc #0
-  sta stackbase+8,x
-  inc SCRATCH       ; non-zero indicates we need to invert result
+  sta stackbase+2,x
 
 checkother
-  lda stackbase+10,x
+  lda stackbase+4,x
   bit #128
-  beq nextbit
+  beq domult
   eor #$ff
-  sta stackbase+10,x
-  lda stackbase+9,x
+  sta stackbase+4,x
+  lda stackbase+3,x
   eor #$ff
-  sta stackbase+9,x ; this and next lda can be eliminated, no? BUG
+  sta stackbase+3,x ; this and next lda can be eliminated, no? BUG
   clc
-  lda stackbase+9,x
+  lda stackbase+3,x
   adc #1
-  sta stackbase+9,x
-  lda stackbase+10,x
-  adc #0
-  sta stackbase+10,x
-
-  lda SCRATCH
-  beq setit
-  dec SCRATCH
-  bra nextbit
-setit
-  inc SCRATCH
-
-
-  ;; multiplying n1 by n2. n1lsb is stackbase+7,x;
-  ;; n1msb is stackbase+8,x; n2lsb is stackbase+9,x; and
-  ;; n2msb is stackbase+10,x
-nextbit
-  ; first bit
-  lda #$01
-  bit stackbase+9,x ; test lowest bit of n2
-  beq nextshift     ; if it's zero, skip to shifting
-  ; it's one, so we do an addition
-  clc
-  lda stackbase+7,x ; add n1 to our working count
-  adc stackbase+1,x ; which is stored in the temporary stack space
-  sta stackbase+1,x
-  lda stackbase+8,x
-  adc stackbase+2,x
-  sta stackbase+2,x
-  lda stackbase+3,x ; 32-bit extension space for n1
-  adc stackbase+5,x
   sta stackbase+3,x
   lda stackbase+4,x
-  adc stackbase+6,x
+  adc #0
   sta stackbase+4,x
-nextshift           ; now shift n1 one place to the left
-  ; shift n1 left
-  asl stackbase+7,x
-  rol stackbase+8,x
-  rol stackbase+5,x ; this is the space into which we're extending
-  rol stackbase+6,x ; n1 (for double length)
-  ; shift n2 right
-  clc               ; and shift n2 one place to the left
-  ror stackbase+10,x
-  ror stackbase+9,x
-  bne nextbit       ; if n2 is non-zero, then continue on
-  lda stackbase+10,x
-  bne nextbit
-done
 .)
-  ;; clean up the mess we made on the stack
-  ;; first, put the result back in the right place
-  lda stackbase+1,x
-  sta stackbase+7,x
-  lda stackbase+2,x
-  sta stackbase+8,x
-  lda stackbase+3,x
-  sta stackbase+9,x
-  lda stackbase+4,x
-  sta stackbase+10,x
-  ;; then, discard our temporary space
-  clc
-  txa
-  adc #6
-  tax
+
+domult
+  jsr umstarsub
 
 .(
   ;; finally, if we need to, invert the result
@@ -4852,6 +4810,58 @@ done
 done
 .)
   rts
+
+doumstar
+  jsr umstarsub
+  jmp next
+
+;;; This version of UM* is based on one contributed by Dr Jeffyll
+;;; to the 6502.org forum. See the thread at
+;;; forum.6502.org/viewtopic.php?f=9&t=689
+;;; The same code is also the basis of the UM* routine in Tali Forth.
+umstarsub
+  CLC 
+  LDA 3,X    ;Copy TOS value to N+2,N+3. To eliminate CLC inside the loop, the
+  SBC #0
+  STA SCRATCH+3    ;special accommodation is mandatory for the case of TOS = 0.
+  LDA 4,X
+  SBC #0
+  BCC UST_Z  ;TOS = 0? Mandatory special treatment for this
+  STA SCRATCH+4
+  LDA #0
+  STA SCRATCH+1      ;16 bits of zero in A, N
+  STX SCRATCH+5    ;tested later for exit from outer loop
+  DEX        ;bias applied to X
+  DEX
+UST_OUTLP
+  LDY #8     ;count for inner loop
+  LSR 3,X    ;think "2,x" then later "3,X"
+UST_INLP
+  BCC UST_NOADD
+  STA SCRATCH+2    ;Save time, don't CLC. Value in N+2,N+3 is reduced by 1 to allow this
+  LDA SCRATCH+1
+  ADC SCRATCH+3
+  STA SCRATCH+1
+  LDA SCRATCH+2
+  ADC SCRATCH+4
+UST_NOADD
+  ROR
+  ROR SCRATCH+1
+  ROR 3,X    ;think "2,x" then later "3,X"
+  DEY
+  BNE UST_INLP  ;go back for 1 more shift?
+  INX
+  CPX SCRATCH+5
+  BNE UST_OUTLP ;go back for 8 more shifts?
+  STA 4,X       ;ms byte of hi-word of result
+  LDA SCRATCH+1
+  STA 3,X       ;ls byte of hi-word of result
+UST_EXIT
+  RTS
+UST_Z
+  STZ 1,X       ;Assumes NEXT has left Y=0. *Implementation Dependent*
+  STZ 2,X
+  BCC UST_EXIT
 
 
 ;;; Mixed-length division. Divide a 32-bit number by a 16-bit number,
@@ -5007,11 +5017,13 @@ dostardiv
   lda stackaccess+1
   pha
   jsr multmixsub    ; do the multiplication
+  dex
+  dex
   pla               ; put the divisor back
-  sta stackaccess+1
+  sta stackbase+2,x
   pla
-  sta stackaccess
-  jsr push16
+  sta stackbase+1,x
+  ;jsr push16
   jsr divmixsub     ; do the division
   jmp next
 
@@ -5133,6 +5145,19 @@ nominus
   jsr puta
   jsr prpadnum
 .)
+  rts
+
+;;; unsigned version
+print32u
+  lda #<PAD
+  inc               ; space for the count
+  sta PADPTR
+  lda #>PAD         ; no carry; presume no page boundary
+  sta PADPTR+1
+  jsr assemble32
+  lda #$20
+  jsr puta
+  jsr prpadnum
   rts
 
 
