@@ -1861,7 +1861,7 @@ done
 
 dorshift
 .(
-  jsr pop16         ; max is 32 by standard
+  jsr pop16         ; max is 32 by standard, so need just one byte
   ldy stackaccess
 loop
   lsr stackbase+2,x ; going right, so start with MSB
@@ -1873,7 +1873,7 @@ loop
 
 dolshift
 .(
-  jsr pop16         ; max is 32 by standard
+  jsr pop16         ; max is 32 by standard, so need just one byte
   ldy stackaccess
 loop
   asl stackbase+1,x ; going left, so start with LSB
