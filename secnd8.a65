@@ -4802,7 +4802,6 @@ done
 ;;; as testsigns16, but this time, presume that there is a 16-bit
 ;;; value on the top of the stack and a 32-bit value below it.
 testsignsmix
-.(
   lda stackbase+2,x
   eor stackbase+6,x
   and #128
@@ -4810,6 +4809,8 @@ testsignsmix
 
   ;; BUG can't the flips and the addition be combined, saving load/saves?
 
+absmix              ; alternative entry point
+.(
   ;; if n1 is negative, make a note and invert it
   lda stackbase+2,x
   bit #128
@@ -4861,6 +4862,12 @@ fixsigns16
 .(
   lda SCRATCH
   beq done
+  jmp flipsign16
+done
+  rts
+.)
+
+flipsign16          ; broken out so it can be called separately
   clc
   lda stackbase+1,x
   eor #$ff
@@ -4870,9 +4877,8 @@ fixsigns16
   eor #$ff
   adc #0
   sta stackbase+2,x
-done
   rts
-.)
+
 
 ;;; Fix up the signs after a signed arithmetic operation if
 ;;; the flag in SCRATCH signals that it's needed.
@@ -4966,16 +4972,44 @@ dosmdivrem
 
 smdivmodsub
 .(
-  jsr testsignsmix
+  ;; unfortunately, signs are weird here, so I have to do this
+  ;; by hand here rather than using the usual routines.
+  lda stackbase+2,x ; check divisor MSB
+  lsr               ; moves sign bit into bit 6
+  and #64           ; mask off other bits
+  sta SCRATCH       ; stash it
+  lda stackbase+6,x ; check dividend MSB
+  and #128          ; grab sign bit
+  ora SCRATCH       ; combine it with other bit
+  sta SCRATCH       ; SCRATCH is 0 when both are positive
+  jsr absmix        ; invert both if needed
+
   jsr umdivmodsub
+
+  ;; now fix up the signs
+
   lda SCRATCH       ; short circuit fixsigns if nothing to be done
   beq done
-  inx               ; fixsigns16 only looks at top 16-bit value
-  inx               ; on the stack but i need to look at two values
-  jsr fixsigns16    ; here. temporarily ignore top item on stack.
-  dex               ; now go back to do top stack item.
+
+  ;; if the dividend is negative, then flip the remainder
+  bit SCRATCH
+  bpl testmixed
+  inx
+  inx
+  jsr flipsign16
   dex
-  jsr fixsigns16
+  dex
+
+testmixed
+  ;; if mixed signs (ie, not 0 and not not 192), flip the quotient
+  ;; we've already tested for 0
+  lda SCRATCH
+  cmp #192
+  beq done    
+
+  ;; flip the quotient
+  jsr flipsign16
+
 done
   rts
 .)
