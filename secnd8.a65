@@ -1529,7 +1529,6 @@ d160link
 d160code
   .word doprint32u
 
-dtop
 d161entry
   .byte 3
   .byte "um*"
@@ -1538,6 +1537,14 @@ d161link
 d161code
   .word doumstar
 
+dtop
+d162entry
+  .byte 6
+  .byte "um/mod"
+d162link
+  .word d161entry
+d162code
+  .word doumdivmod
 
 
 ;d101entry
@@ -5008,6 +5015,66 @@ enddiv
 donemixdiv
   ply               ; restore y
   rts
+
+doumdivmod
+  jsr umdivmodsub
+  jmp next
+
+;;; This implementation of UM/MOD is from Garth Wilson on 6502.org.
+umdivmodsub
+.(
+  SEC             ; Detect overflow or /0 condition.
+  LDA 5,X         ; Divisor must be more than high cell of dividend.  To
+  SBC 1,X         ; find out, subtract divisor from high cell of dividend;
+  LDA 6,X         ; if carry flag is still set at the end, the divisor was
+  SBC 2,X         ; not big enough to avoid overflow. This also takes care
+  BCS overflow    ; of any /0 condition.  Branch if overflow or /0 error.
+                  ; We will loop 16 times; but since we shift the dividend
+  LDY     #$11    ; over at the same time as shifting the answer in, the
+                  ; operation must start AND finish with a shift of the
+                  ; low cell of the dividend (which ends up holding the
+                  ; quotient), so we start with 17 (11H) in X.
+loop
+  ROL 3,X         ; Move low cell of dividend left one bit, also shifting
+  ROL 4,X         ; answer in. The 1st rotation brings in a 0, which later
+                  ; gets pushed off the other end in the last rotation.
+  DEY
+  BEQ done        ; Branch to the end if finished.
+
+  ROL 5,X         ; Shift high cell of dividend left one bit, also
+  ROL 6,X         ; shifting next bit in from high bit of low cell.
+  STZ SCRATCH+1   ; Zero old bits of CARRY so subtraction works right.
+  ROL SCRATCH+1   ; Store old high bit of dividend in CARRY.  (For STZ
+                  ; one line up, NMOS 6502 will need LDA #0, STA CARRY.)
+  SEC             ; See if divisor will fit into high 17 bits of dividend
+  LDA 5,X         ; by subtracting and then looking at carry flag.
+  SBC 1,X         ; First do low byte.
+  STA SCRATCH+2   ; Save difference low byte until we know if we need it.
+  LDA 6,X
+  SBC 2,X         ; Then do high byte.
+  STA SCRATCH+3   ; Save difference high byte until we know if we need it.
+  LDA SCRATCH+1   ; Bit 0 of CARRY serves as 17th bit.
+  SBC #0          ; Complete the subtraction by doing the 17th bit before
+  BCC loop        ; determining if the divisor fit into the high 17 bits
+                  ; of the dividend.  If so, the carry flag remains set.
+  LDA SCRATCH+2   ; If divisor fit into dividend high 17 bits, update
+  STA 5,X         ; dividend high cell to what it would be after
+  LDA SCRATCH+3
+  STA 6,X         ; subtraction
+  BRA     loop    ; Always branch.
+
+overflow
+  LDA #$FF        ; If overflow occurred, put FF
+  STA 5,X         ; in remainder low byte
+  STA 6,X         ; and high byte,
+  STA 3,X         ; and in quotient low byte
+  STA 4,X         ; and high byte.
+
+done
+  INX
+  INX
+  RTS
+.)
 
 
 dostardiv
