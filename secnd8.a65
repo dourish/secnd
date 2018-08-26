@@ -1537,7 +1537,6 @@ d161link
 d161code
   .word doumstar
 
-dtop
 d162entry
   .byte 6
   .byte "um/mod"
@@ -1546,6 +1545,14 @@ d162link
 d162code
   .word doumdivmod
 
+dtop
+d163entry
+  .byte 6
+  .byte "sm/rem"
+d163link
+  .word d162entry
+d163code
+  .word dosmdivrem
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -4747,13 +4754,17 @@ domultmix
   jsr multmixsub
   jmp next
 
-multmixsub
+;;; test the signs of two 16-bit operands. After this, each operand
+;;; is on the stack in its absolute value, and SCRATCH is either 0
+;;; (if the signs were the smae) or 128 if not.
+testsigns16
 .(
-
   lda stackbase+2,x
   eor stackbase+4,x
   and #128
   sta SCRATCH       ; scratch is 0 if numbers have same sign, 128 otherwise
+
+  ;; BUG can't the flips and the addition be combined, saving load/saves?
 
   ;; if n1 is negative, make a note and invert it
   lda stackbase+2,x
@@ -4763,9 +4774,7 @@ multmixsub
   sta stackbase+2,x
   lda stackbase+1,x
   eor #$ff
-  sta stackbase+1,x ; this and next lda can be eliminated, no? BUG
   clc
-  lda stackbase+1,x
   adc #1
   sta stackbase+1,x
   lda stackbase+2,x
@@ -4775,26 +4784,100 @@ multmixsub
 checkother
   lda stackbase+4,x
   bit #128
-  beq domult
+  beq done
   eor #$ff
   sta stackbase+4,x
   lda stackbase+3,x
   eor #$ff
-  sta stackbase+3,x ; this and next lda can be eliminated, no? BUG
   clc
-  lda stackbase+3,x
   adc #1
   sta stackbase+3,x
   lda stackbase+4,x
   adc #0
   sta stackbase+4,x
+done
+  rts
 .)
 
-domult
-  jsr umstarsub
-
+;;; as testsigns16, but this time, presume that there is a 16-bit
+;;; value on the top of the stack and a 32-bit value below it.
+testsignsmix
 .(
-  ;; finally, if we need to, invert the result
+  lda stackbase+2,x
+  eor stackbase+6,x
+  and #128
+  sta SCRATCH       ; scratch is 0 if numbers have same sign, 128 otherwise
+
+  ;; BUG can't the flips and the addition be combined, saving load/saves?
+
+  ;; if n1 is negative, make a note and invert it
+  lda stackbase+2,x
+  bit #128
+  beq checkother
+  eor #$ff
+  sta stackbase+2,x
+  lda stackbase+1,x
+  eor #$ff
+  clc
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+
+checkother
+  lda stackbase+6,x
+  bit #128
+  beq done
+  eor #$ff
+  sta stackbase+6,x
+  lda stackbase+5,x
+  eor #$ff
+  sta stackbase+5,x
+  lda stackbase+4,x
+  eor #$ff
+  sta stackbase+4,x
+  lda stackbase+3,x
+  eor #$ff
+  clc
+  adc #1
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+  lda stackbase+5,x
+  adc #0
+  sta stackbase+5,x
+  lda stackbase+6,x
+  adc #0
+  sta stackbase+6,x
+done
+  rts
+.)
+
+;;; Fix up the signs after a signed arithmetic operation if
+;;; the flag in SCRATCH signals that it's needed.
+fixsigns16
+.(
+  lda SCRATCH
+  beq done
+  clc
+  lda stackbase+1,x
+  eor #$ff
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  eor #$ff
+  adc #0
+  sta stackbase+2,x
+done
+  rts
+.)
+
+;;; Fix up the signs after a signed arithmetic operation if
+;;; the flag in SCRATCH signals that it's needed.
+fixsigns32
+.(
   lda SCRATCH
   beq done
   clc
@@ -4815,7 +4898,13 @@ domult
   adc #0
   sta stackbase+4,x
 done
+  rts
 .)
+
+multmixsub
+  jsr testsigns16
+  jsr umstarsub
+  jsr fixsigns32
   rts
 
 doumstar
@@ -4866,10 +4955,30 @@ UST_NOADD
 UST_EXIT
   RTS
 UST_Z
-  STZ 1,X       ;Assumes NEXT has left Y=0. *Implementation Dependent*
+  STZ 1,X
   STZ 2,X
   BCC UST_EXIT
 
+
+dosmdivrem
+  jsr smdivmodsub
+  jmp next
+
+smdivmodsub
+.(
+  jsr testsignsmix
+  jsr umdivmodsub
+  lda SCRATCH       ; short circuit fixsigns if nothing to be done
+  beq done
+  inx               ; fixsigns16 only looks at top 16-bit value
+  inx               ; on the stack but i need to look at two values
+  jsr fixsigns16    ; here. temporarily ignore top item on stack.
+  dex               ; now go back to do top stack item.
+  dex
+  jsr fixsigns16
+done
+  rts
+.)
 
 ;;; Mixed-length division. Divide a 32-bit number by a 16-bit number,
 ;;; giving a 16-bit result. This is used as part of */.
@@ -5075,6 +5184,7 @@ done
   INX
   RTS
 .)
+
 
 
 dostardiv
