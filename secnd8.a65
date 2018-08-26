@@ -5020,6 +5020,16 @@ done
 ;;; at stackbase+1 and +2), and the 32-bit divisand is lower (ie
 ;;; at stackbase+3 through +6)
 divmixsub
+  jsr smdivmodsub
+  lda stackbase+1,x
+  sta stackbase+3,x
+  lda stackbase+2,x
+  sta stackbase+4,x
+  inx
+  inx
+  rts
+
+olddivmixsub
 .(
   phy               ; preserve Y
 
