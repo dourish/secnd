@@ -1022,7 +1022,6 @@ d99code
   .word doforget
 
 d100entry
-;  .byte 1           ; not immediate though, right? BUG
   .byte %00100001   ; IMMEDIATE
   .byte $27         ; tick
 d100link
@@ -2343,7 +2342,6 @@ done
 ;;; constant reads the next word from input and allocates space
 ;;; for it in the dictionary as a constant (just like variable
 ;;; above, except that the code will do something different).
-;;; BUG shares so much code with above, we should reuse
 doconstant
   jsr createsub     ; use CREATE to set up new dictionary entry
 
@@ -3120,7 +3118,6 @@ nocompile
 ;;; address of the branch offset, then calculate the offset and
 ;;; write it in.
 ;;;
-;;; BUG should exit with error if we're not in compile mode
 dothen
 .(
   lda STATUS
@@ -3155,8 +3152,12 @@ thenproceed
   ldy #1
   lda SCRATCH+1
   sta (stackaccess),y
+  bra done
 
 nocompile
+  jmp abortcompile
+
+done
   jmp next          ; done. proceed to next instruction.
 .)
 
@@ -3166,7 +3167,6 @@ nocompile
 ;;; it compiles in a branch (not 0branch this time) and leaves an address
 ;;; on the stack for THEN to fill in.
 ;;;
-;;; BUG doesn't check for compiler
 doelse
 .(
   lda STATUS
