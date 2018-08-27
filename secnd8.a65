@@ -14,6 +14,9 @@
 ;;; It can run in ROM or RAM; for now, the memory map is built
 ;;; for a RAM-resident configuration.
 ;;;
+;;; More of this code than you would expect was written in the
+;;; United Club at LAX Terminal 7.
+;;;
 ;;; Paul Dourish, December 2017
 ;;;
 ;;; Version history:
@@ -1561,7 +1564,6 @@ d164link
 d164code
   .word docreate
 
-dtop
 d165entry
   .byte 1
   .byte ","
@@ -1570,6 +1572,14 @@ d165link
 d165code
   .word docomma
 
+dtop
+d166entry
+  .byte 7
+  .byte "execute"
+d166link
+  .word d165entry
+d166code
+  .word doexecute
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1673,7 +1683,7 @@ dolist
   adc #0
   sta IP+1
 
-  ;; IP now points to the next isntruction we want to execute, in
+  ;; IP now points to the next instruction we want to execute, in
   ;; this word. Proceed to execute it.
   ;jmp next         ; commented out because we can just fall through
 
@@ -4341,6 +4351,8 @@ dotick
   jsr readnext
   jsr dictmatch
 
+  ;; BUG NOT CHECKING FOR MATCH FAILURE
+
   clc               ; calculate xt. Add length of word, plus one for
   lda (DPTR)        ; the length byte and two for the link
   and #%00011111    ; mask off the status bits
@@ -4361,9 +4373,16 @@ doforget
 .(
   jsr readnext      ; read next word from input stream
   jsr dictmatch     ; look for a match
-  lda DPTR
-  ora DPTR+1
+  lda DPTR+1        ; no words on zero page, so only need to check this
   beq nomatch
+
+  ;; first, reset DP to this location
+  lda DPTR
+  sta DP
+  lda DPTR+1
+  sta DP+1
+
+  ;; next, grab the link pointer in order to reset DT
   lda (DPTR)        ; load the word count for this entry
   inc               ; and add one for the count byte
   clc               ; and add to DPTR, so that it points to the link
@@ -5640,6 +5659,18 @@ swap32
   rts
 
 
+;;; BUG not at all sure about this yet... in particular, it might
+;;; work from the interpreter but entirely fail inside a defined
+;;; word
+doexecute
+  lda stackbase+1,x
+  sta dummyparam
+  lda stackbase+2,x
+  sta dummyparam+1
+  inx
+  inx
+  jmp execdummy
+
 
 ;;;
 ;;; *** TEXT INTERPRETER
@@ -5670,14 +5701,9 @@ startinterp
   ldy #0
 .(
 next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   lda greeting,y
   beq interploop
   jsr puta
-;  sta ACIA_DATA
   iny
   jmp next_char
 .)
@@ -5694,23 +5720,39 @@ interploop
   jsr readnext
 
   ;; search for a match in the dictionary
-  ;;
   jsr dictmatch
-  lda DPTR          ; check for no match (DPTR is 0000)
-  ora DPTR+1
+;  lda DPTR          ; check for no match (DPTR is 0000)
+;  ora DPTR+1
+  lda DPTR+1        ; no words on zero page, so this indicates failure
   beq nomatch
 
   ;; we found a match for a word to execute. Set up the context
   ;; and call NEXT to get started.
 gotmatch
-  ;; first, check if we're compiling. if we are not, then we can continue
+  ;; DPTR currently indicates the matching dictionary entry.
+  ;; update it so that it points to the code word.
+  ldy #1
+.(
+  clc
+  lda (DPTR)        ; load the word length
+  sta SCRATCH       ; save a copy
+  and #%00011111    ; mask off tag bits
+  adc #3            ; one byte for length, two more for link word
+  adc DPTR          ; add to address and store in dummy word entry
+  sta DPTR
+  bcc done
+  inc DPTR+1
+done
+.)
+
+  ;; next, check if we're compiling. if we are not, then we can continue
   lda STATUS
   bit #COMPILE
   beq nocompile
 
   ;; now check if the word is immediate... because if it is, we should
   ;; go ahead and execute it, even if we're compiling
-  lda (DPTR)
+  lda SCRATCH
   bit #IMM
   bne nocompile
 
@@ -5720,16 +5762,9 @@ gotmatch
   ;; DPTR stores the start of the entry for the word to execute.
   ;; So its code word is at (DPTR) + wordlength + 1 (len) + 2 (link)
   ldy #1
-  lda (DPTR)        ; word length
-  and #%00011111    ; mask off tag bits
-  inc 		    ; +1 for the length byte
-  inc
-  inc               ; + 2 more for the link word
-  clc
-  adc DPTR          ; add to address and store in dummy word entry
+  lda DPTR
   sta (DP)
   lda DPTR+1
-  adc #$0
   sta (DP),y
 
   ;; increment DP by 2
@@ -5747,20 +5782,12 @@ skipmsb
   jmp interploop
 
 nocompile
-  ;; DPTR stores the start of the entry for the word to execute.
-  ;; So its code word is at (DPTR) + wordlength + 1 (len) + 2 (link)
-  lda (DPTR)        ; word length
-  and #%00011111    ; mask off tag bits
-  inc 		    ; +1 for the length byte
-  inc
-  inc               ; + 2 more for the link word
-  clc
-  adc DPTR          ; add to address and store in dummy word entry
+  lda DPTR          ; add to address and store in dummy word entry
   sta dummyparam
   lda DPTR+1
-  adc #$0
   sta dummyparam+1
 
+execdummy
   ;; put the dummy parameter address into IP.
   lda #<dummyparam
   sta IP
