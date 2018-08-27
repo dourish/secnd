@@ -1553,7 +1553,6 @@ d163link
 d163code
   .word dosmdivrem
 
-dtop
 d164entry
   .byte 6
   .byte "create"
@@ -1561,6 +1560,16 @@ d164link
   .word d163entry
 d164code
   .word docreate
+
+dtop
+d165entry
+  .byte 1
+  .byte ","
+d165link
+  .word d164entry
+d165code
+  .word docomma
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2253,7 +2262,7 @@ docreate
   ldy #1
   lda #<null
   sta (DP)
-  lda #<null
+  lda #>null
   sta (DP),y
   iny
 
@@ -2566,6 +2575,35 @@ continue
 
   jmp next
 
+
+;;; docomma is the basic compilation mechanism.
+docomma
+  jsr commasub
+  jmp next
+
+;;; add value from the stack to the dictionary at DP and inc DP
+commasub
+  ldy #0
+  lda stackbase+1,x
+  sta (DP),y
+  iny
+  lda stackbase+2,x
+  sta (DP),y
+  iny
+
+.(
+  clc
+  tya
+  adc DP
+  sta DP
+  bcc done
+  inc DP+1
+done
+.)
+
+  inx
+  inx
+  rts
 
 ;;; Do dot-quote. I'm not entirely happy with my solution for this yet.
 ;;; This word has three different context-dependent behaviors:
