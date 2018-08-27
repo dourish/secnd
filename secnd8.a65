@@ -1545,7 +1545,6 @@ d162link
 d162code
   .word doumdivmod
 
-dtop
 d163entry
   .byte 6
   .byte "sm/rem"
@@ -1553,6 +1552,15 @@ d163link
   .word d162entry
 d163code
   .word dosmdivrem
+
+dtop
+d164entry
+  .byte 6
+  .byte "create"
+d164link
+  .word d163entry
+d164code
+  .word docreate
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1703,6 +1711,7 @@ exit
   inc RP
   lda (RP)          ; and place it in the instruction pointer
   sta IP+1
+null
   jmp next          ; go execute the next instruction
 
 
@@ -2206,32 +2215,18 @@ docells
 ;;; for it in the dictionary as a variable (ie with the "dovaddr"
 ;;; code).
 dovariable
-  ;; grab next word from the input buffer
-  jsr readnext      ; next word from input buffer into WORD
- 
-  ;; copy word from WORD
-  lda WORD          ; first, copy the count
-  sta (DP)
-  tay               ; store count in Y
-.(
-copynext            ; now copy the rest of the word, backwards
-  lda WORD,y        ; copy Yth letter
-  sta (DP),y        ; store it in dictionary space
-  dey               ; count down to 0
-  bne copynext
-.)
+  jsr createsub     ; use CREATE to set up new dictionary entry
 
-  lda (DP)          ; set Y to next available byte
-  tay
-  iny
+  ;; move DP back by two places
+  sec
+  lda DP
+  sbc #2
+  sta DP
+  lda DP+1
+  sbc #0
+  sta DP+1
 
-  ;; set link to location pointed to by DT
-  lda DT
-  sta (DP),y
-  iny
-  lda DT+1
-  sta (DP),y
-  iny
+  ldy #0
 
   ;; set code to dovaddr
   lda #<dovaddr
@@ -2243,12 +2238,6 @@ copynext            ; now copy the rest of the word, backwards
 
   iny               ; bump twice more to allow parameter space
   iny               ; for storage
-
-  ;; set DT to new top entry, the one we've just created here
-  lda DP
-  sta DT
-  lda DP+1
-  sta DT+1
 
 .(
   clc               ; update DP to next available space
@@ -2262,11 +2251,13 @@ continue
  
   jmp next
 
-;;; constant reads the next word from input and allocates space
-;;; for it in the dictionary as a constant (just like variable
-;;; above, except that the code will do something different).
-;;; BUG shares so much code with above, we should reuse
-doconstant
+docreate
+  jsr createsub
+  jmp next
+
+;;; NOTE at the end of this, Y points to the offset from DP for the
+;;; next byte. Should I just update DP? What should the XT be?
+createsub
   ;; grab next word from the input buffer
   jsr readnext      ; next word from input buffer into WORD
  
@@ -2293,6 +2284,50 @@ copynext            ; now copy the rest of the word, backwards
   lda DT+1
   sta (DP),y
   iny
+
+  lda #<null    ; set the code field to null
+  sta (DP),y
+  iny
+  lda #>null
+  sta (DP),y
+  iny
+
+  ;; set DT to new top entry, the one we've just created here
+  lda DP
+  sta DT
+  lda DP+1
+  sta DT+1
+
+.(
+  ;; inc DP by Y
+  clc
+  tya
+  adc DP
+  sta DP
+  bcc done
+  inc DP+1
+done
+.)
+  rts
+
+
+;;; constant reads the next word from input and allocates space
+;;; for it in the dictionary as a constant (just like variable
+;;; above, except that the code will do something different).
+;;; BUG shares so much code with above, we should reuse
+doconstant
+  jsr createsub     ; use CREATE to set up new dictionary entry
+
+  ;; move DP back by two places
+  sec
+  lda DP
+  sbc #2
+  sta DP
+  lda DP+1
+  sbc #0
+  sta DP+1
+
+  ldy #0
 
   ;; set code to doloadconst
   lda #<doloadconst ; one of only two lines different from above
@@ -2312,12 +2347,6 @@ copynext            ; now copy the rest of the word, backwards
   iny
   inx               ; drop two bytes (one cell) from the stack
   inx               
-
-  ;; set DT to new top entry, the one we've just created here
-  lda DP
-  sta DT
-  lda DP+1
-  sta DT+1
 
 .(
   clc               ; update DP to next available space
@@ -2472,32 +2501,24 @@ docolon
   ora #COMPILE
   sta STATUS
 
-  ;; grab next word from the input buffer
-  jsr readnext      ; next word from input buffer into WORD
- 
-  ;; copy word from WORD
-  lda WORD          ; first, copy the count
-  sta (DP)
-  tay               ; store count in Y
-.(
-copynext            ; now copy the rest of the word, backwards
-  lda WORD,y        ; copy Yth letter
-  sta (DP),y        ; store it in dictionary space
-  dey               ; count down to 0
-  bne copynext
-.)
+  lda DP            ; cache the address of the word we're now compiling
+  sta CWORD         ; we wait until we're done (dosemic) before we update
+  lda DP+1          ; the top-of-dictionary pointer
+  sta CWORD+1
 
-  lda (DP)          ; set Y to next available byte
-  tay
-  iny
+  ;; use CREATE to add a new entry to the dictionary
+  jsr createsub
 
-  ;; set link to location pointed to by DT
-  lda DT
-  sta (DP),y
-  iny
-  lda DT+1
-  sta (DP),y
-  iny
+  ;; move DP back by two places, to code pointer
+  sec
+  lda DP
+  sbc #2
+  sta DP
+  lda DP+1
+  sbc #0
+  sta DP+1
+
+  ldy #0
 
   ;; set code to dolist
   lda #<dolist
@@ -2506,11 +2527,6 @@ copynext            ; now copy the rest of the word, backwards
   lda #>dolist
   sta (DP),y
   iny
-
-  lda DP            ; cache the address of the word we're now compiling
-  sta CWORD         ; we wait until we're done (dosemic) before we update
-  lda DP+1          ; the top-of-dictionary pointer
-  sta CWORD+1
 
   clc               ; update DP to next available space
   tya               ; by adding bytes consumed to DP
@@ -2551,6 +2567,7 @@ continue
 .)
 
   ;; set DT to new top entry, the word we've just finished compiling
+  ;; BUG this may be unnecessary now, handled by CREATE?
   lda CWORD
   sta DT
   lda CWORD+1
