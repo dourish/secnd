@@ -1022,7 +1022,8 @@ d99code
   .word doforget
 
 d100entry
-  .byte 1           ; not immediate though, right? BUG
+;  .byte 1           ; not immediate though, right? BUG
+  .byte %00100001   ; IMMEDIATE
   .byte $27         ; tick
 d100link
   .word d99entry
@@ -4348,6 +4349,7 @@ done
 ;;; dotick implements TICK ('). Grabs a word and looks is up in the
 ;;; dictionary, leaving the xt on the stack. Short and sweet...
 dotick
+.(
   jsr readnext
   jsr dictmatch
 
@@ -4363,8 +4365,41 @@ dotick
   adc #0            ; in case of carry
   sta stackaccess+1
 
+  ;; now check -- are we compiling? If so, then compile a literal
+  ;; with that value. If not, push it on the stack.
+  lda STATUS
+  beq nocompile
+
+  ;; compiling (note code shared with interpreter BUG COMBINE)
+  ldy #0
+  lda #<dolitcode
+  sta (DP),y
+  iny
+  lda #>dolitcode
+  sta (DP),y
+  iny
+  lda stackaccess
+  sta (DP),y
+  iny
+  lda stackaccess+1
+  sta (DP),y
+  iny
+
+  ;; add Y to DP
+  clc
+  tya
+  adc DP
+  sta DP
+  lda DP+1
+  adc #0
+  sta DP+1
+  bra done
+
+nocompile
   jsr push16
+done
   jmp next
+.)
 
 ;;; doforget implements FORGET. Uses the same dictionary matching
 ;;; routine as the text interpreter (I'm gradually breaking this stuff
@@ -5663,13 +5698,19 @@ swap32
 ;;; work from the interpreter but entirely fail inside a defined
 ;;; word
 doexecute
-  lda stackbase+1,x
-  sta dummyparam
+  lda stackbase+1,x ; reset XT (W) to the address signalled on the stack
+  sta XT
   lda stackbase+2,x
-  sta dummyparam+1
+  sta XT+1
   inx
   inx
-  jmp execdummy
+  ldy #1
+  lda (XT),y        ; XT contains a pointer to a code word. Load
+  sta CODEVEC+1     ; the code address stored there into CODEVEC.
+  lda (XT)
+  sta CODEVEC
+
+  jmp (CODEVEC)     ; execute the code for this instruction/word
 
 
 ;;;
