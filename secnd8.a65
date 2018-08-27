@@ -2217,15 +2217,6 @@ docells
 dovariable
   jsr createsub     ; use CREATE to set up new dictionary entry
 
-  ;; move DP back by two places
-  sec
-  lda DP
-  sbc #2
-  sta DP
-  lda DP+1
-  sbc #0
-  sta DP+1
-
   ldy #0
 
   ;; set code to dovaddr
@@ -2251,15 +2242,40 @@ continue
  
   jmp next
 
+
+;;; create a new entry in the dictionary using the next word given
+;;; in the input stream. This relies on createsub to do much of the
+;;; manipulation; that code is also shared with dovariable, doconstant,
+;;; and docolon.
 docreate
   jsr createsub
+
+  ldy #1
+  lda #<null
+  sta (DP)
+  lda #<null
+  sta (DP),y
+  iny
+
+.(
+  clc
+  tya
+  adc DP
+  sta DP
+  bcc done
+  inc DP+1
+done
+.)
   jmp next
 
-;;; NOTE at the end of this, Y points to the offset from DP for the
-;;; next byte. Should I just update DP? What should the XT be?
+
+;;; this subroutine adds a new entry to the dictionary. On exit,
+;;; DT has been updated to the new entry, and DP points to the next
+;;; available byte, which should be for the code field for the entry.
+;;; Whatever calls createsub has to finish the job by adding a code
+;;; field at DP.
 createsub
-  ;; grab next word from the input buffer
-  jsr readnext      ; next word from input buffer into WORD
+  jsr readnext      ; get next word from input buffer into WORD
  
   ;; copy word from WORD
   lda WORD          ; first, copy the count
@@ -2273,7 +2289,7 @@ copynext            ; now copy the rest of the word, backwards
   bne copynext
 .)
 
-  lda (DP)          ; set Y to next available byte
+  lda (DP)          ; set Y to next available byte offset
   tay
   iny
 
@@ -2282,13 +2298,6 @@ copynext            ; now copy the rest of the word, backwards
   sta (DP),y
   iny
   lda DT+1
-  sta (DP),y
-  iny
-
-  lda #<null    ; set the code field to null
-  sta (DP),y
-  iny
-  lda #>null
   sta (DP),y
   iny
 
@@ -2317,15 +2326,6 @@ done
 ;;; BUG shares so much code with above, we should reuse
 doconstant
   jsr createsub     ; use CREATE to set up new dictionary entry
-
-  ;; move DP back by two places
-  sec
-  lda DP
-  sbc #2
-  sta DP
-  lda DP+1
-  sbc #0
-  sta DP+1
 
   ldy #0
 
@@ -2508,15 +2508,6 @@ docolon
 
   ;; use CREATE to add a new entry to the dictionary
   jsr createsub
-
-  ;; move DP back by two places, to code pointer
-  sec
-  lda DP
-  sbc #2
-  sta DP
-  lda DP+1
-  sbc #0
-  sta DP+1
 
   ldy #0
 
