@@ -2234,6 +2234,7 @@ docells
 ;;; for it in the dictionary as a variable (ie with the "dovaddr"
 ;;; code).
 dovariable
+  clc               ; indicates we want create to update DT
   jsr createsub     ; use CREATE to set up new dictionary entry
 
   ldy #0
@@ -2267,6 +2268,7 @@ continue
 ;;; manipulation; that code is also shared with dovariable, doconstant,
 ;;; and docolon.
 docreate
+  clc               ; indicates that create should update DT
   jsr createsub
 
   ldy #1
@@ -2293,7 +2295,11 @@ done
 ;;; available byte, which should be for the code field for the entry.
 ;;; Whatever calls createsub has to finish the job by adding a code
 ;;; field at DP.
+;;;
+;;; whether or not DT is updated depends on the carry flag (clear for
+;;; yes and set for no).
 createsub
+  php               ; preserve the carry flag
   jsr readnext      ; get next word from input buffer into WORD
  
   ;; copy word from WORD
@@ -2320,11 +2326,16 @@ copynext            ; now copy the rest of the word, backwards
   sta (DP),y
   iny
 
+.(
+  plp               ; retreive the carry flag
+  bcs continue
   ;; set DT to new top entry, the one we've just created here
   lda DP
   sta DT
   lda DP+1
   sta DT+1
+continue
+.)
 
 .(
   ;; inc DP by Y
@@ -2343,6 +2354,7 @@ done
 ;;; for it in the dictionary as a constant (just like variable
 ;;; above, except that the code will do something different).
 doconstant
+  clc               ; signals that create should update DT
   jsr createsub     ; use CREATE to set up new dictionary entry
 
   ldy #0
@@ -2525,6 +2537,7 @@ docolon
   sta CWORD+1
 
   ;; use CREATE to add a new entry to the dictionary
+  sec               ; signals that create shouldn't update DT
   jsr createsub
 
   ldy #0
@@ -4347,14 +4360,22 @@ done
   jmp next
 
 ;;; dotick implements TICK ('). Grabs a word and looks is up in the
-;;; dictionary, leaving the xt on the stack. Short and sweet...
+;;; dictionary. In the interpreter, leaves the xt on the stack; in
+;;; the compiler, compiles it in to the current definition.
 dotick
 .(
   jsr readnext
   jsr dictmatch
 
-  ;; BUG NOT CHECKING FOR MATCH FAILURE
+  lda DPTR+1
+  bne continue
+  lda #$20
+  jsr puta
+  jsr printword
+  jmp abortnotdef
+  jmp abortnotdef
 
+continue
   clc               ; calculate xt. Add length of word, plus one for
   lda (DPTR)        ; the length byte and two for the link
   and #%00011111    ; mask off the status bits
@@ -5930,35 +5951,25 @@ nointerpret
   ;; print an error, in three stages. first, a space; then, the
   ;; undefined word; finally, the error message.
 
-;.(
-;wait_txd_empty3
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty3
-;  lda #$20
-;  sta ACIA_DATA
-;.)
   lda #$20
   jsr puta
+  jsr printword
+  jmp abortnotdef
 
+;;; print the word in WORD
+printword
   ldy #1
 .(
 next_char
-;wait_txd_empty3
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty3
   lda WORD,y
   jsr puta
-;  sta ACIA_DATA
   iny
   cpy WORD
   bcc next_char
   beq next_char
 .)
 
-  jmp abortnotdef
-
+  rts
 
 ;;; dictmatch looks up a word in the dictionary. The word being
 ;;; matched is indicated by WORD, which holds a pointer to a
