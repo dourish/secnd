@@ -30,7 +30,7 @@
 ;;; v06  cleaning up and debugging, various new words, more internal
 ;;;      elements available to Forth, performance improvements
 ;;; v07  SD card integration, block/buffer implementation, editor
-;;; v08  string routines, cleanup
+;;; v08  string routines, cleanup, interpreter work
 ;;;
 
   * = $0300
@@ -138,60 +138,6 @@ LIMIT=FIRST+BUFFERSPACE
 #include "../mitemon/decl.a65"
 #include "../mitemon/stack.a65"
 
-
-;;;
-;;; Initialization and configuration. This version is running
-;;; from RAM, so there's no need to initialize the ACIA. Set up
-;;; the stack and the major variables.
-;;;
-coldstart
-  ;; initialize stack...
-  jsr initstack
-
-  ;; initialize variables...
-
-  ;; IP is the Forth instruction pointer
-  stz IP
-  stz IP+1
-
-  stz STATUS        ; turn off compilation
-  stz SOURCE        ; input from terminal
-
-  ;; Initialize the return stack. I'm just putting that on page 2, 
-  ;; growing downwards, until I have a better idea; I should probably
-  ;; combine with some other area because a whole page is much
-  ;; more space than needed
-  lda #$FF
-  sta RP
-  lda #>RBASE
-  sta RP+1
-
-  ;; Initialize DT to the last entry on the dictionary (below)
-  lda #<dtop
-  sta DT
-  lda #>dtop
-  sta DT+1  
-
-  ;; Initialize DP to the first available dictionary space (USERBASE)
-  lda #<USERBASE
-  sta DP
-  lda #>USERBASE
-  sta DP+1
-
-  ;; initialize the 6522 for the SD routines
-  jsr setup6522
-
-  ;; initialize pointers and memory for BLOCK code
-  stz PREV
-  stz PREV+1
-  lda #<FIRST
-  sta USE
-  lda #>FIRST
-  sta USE+1
-  jsr zerobuffers
-
-  ;; jump to text interpreter
-  jmp startinterp
 
 
 
@@ -1572,7 +1518,6 @@ d165link
 d165code
   .word docomma
 
-dtop
 d166entry
   .byte 7
   .byte "execute"
@@ -1580,6 +1525,16 @@ d166link
   .word d165entry
 d166code
   .word doexecute
+
+dtop
+d167entry
+  .byte 6
+  .byte "unused"
+d167link
+  .word d166entry
+d167code
+  .word dounused
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1600,6 +1555,7 @@ d166code
 ;  .word doparenqdo
 
 ;; TOP OF DICTIONARY
+
 
 
 
@@ -1633,6 +1589,64 @@ dummyparam
 dummyexit
   .word doquitcode
 
+
+
+
+;;;
+;;; *** COLD START
+;;;
+;;; Initialization and configuration. This version is running
+;;; from RAM, so there's no need to initialize the ACIA. Set up
+;;; the stack and the major variables.
+;;;
+coldstart
+  ;; initialize stack...
+  jsr initstack
+
+  ;; initialize variables...
+
+  ;; IP is the Forth instruction pointer
+  stz IP
+  stz IP+1
+
+  stz STATUS        ; turn off compilation
+  stz SOURCE        ; input from terminal
+
+  ;; Initialize the return stack. I'm just putting that on page 2, 
+  ;; growing downwards, until I have a better idea; I should probably
+  ;; combine with some other area because a whole page is much
+  ;; more space than needed
+  lda #$FF
+  sta RP
+  lda #>RBASE
+  sta RP+1
+
+  ;; Initialize DT to the last entry on the dictionary (below)
+  lda #<dtop
+  sta DT
+  lda #>dtop
+  sta DT+1  
+
+  ;; Initialize DP to the first available dictionary space (USERBASE)
+  lda #<USERBASE
+  sta DP
+  lda #>USERBASE
+  sta DP+1
+
+  ;; initialize the 6522 for the SD routines
+  jsr setup6522
+
+  ;; initialize pointers and memory for BLOCK code
+  stz PREV
+  stz PREV+1
+  lda #<FIRST
+  sta USE
+  lda #>FIRST
+  sta USE+1
+  jsr zerobuffers
+
+  ;; jump to text interpreter
+  jmp startinterp
 
 
 
@@ -5742,6 +5756,19 @@ doexecute
   sta CODEVEC
 
   jmp (CODEVEC)     ; execute the code for this instruction/word
+
+dounused
+  dex
+  dex
+  sec
+  lda #<IOSPACE
+  sbc DP
+  sta stackbase+1,x
+  lda #>IOSPACE
+  sbc DP+1
+  sta stackbase+2,x
+  jmp next
+
 
 
 ;;;
