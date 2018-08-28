@@ -100,7 +100,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3400      ; staring address for user code
+USERBASE=$3500      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -2266,15 +2266,25 @@ continue
 ;;; create a new entry in the dictionary using the next word given
 ;;; in the input stream. This relies on createsub to do much of the
 ;;; manipulation; that code is also shared with dovariable, doconstant,
-;;; and docolon.
+;;; and docolon. The word returns the next available storage location.
 docreate
   clc               ; indicates that create should update DT
   jsr createsub
 
   ldy #1
-  lda #<null
+  lda #<doloadconst
   sta (DP)
-  lda #>null
+  lda #>doloadconst
+  sta (DP),y
+  iny
+
+  clc
+  lda DP
+  adc #4
+  sta (DP),y
+  iny
+  lda DP+1
+  adc #0
   sta (DP),y
   iny
 
