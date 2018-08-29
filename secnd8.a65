@@ -5875,8 +5875,6 @@ interploop
 
   ;; search for a match in the dictionary
   jsr dictmatch
-;  lda DPTR          ; check for no match (DPTR is 0000)
-;  ora DPTR+1
   lda DPTR+1        ; no words on zero page, so this indicates failure
   beq nomatch
 
@@ -5959,20 +5957,23 @@ nomatch
   ldy WORD
 numcheck
 .(
-  lda WORD,y
-  cmp #$2d          ; minus sign
-  bne digitcheck
-  cpy #$1           ; only allowed when y=1
-  bne nointerpret
-  bra continue
-digitcheck
-  cmp #$30
-  bcc nointerpret   ; BCC = branch if less than
-  cmp #$40
-  bcs nointerpret   ; BCS = branch if greater or equal
-continue
-  dey
-  bne numcheck
+  ;; this code currently checks if it's a number first, and, if
+  ;; so, reads it. I want to change this to, instead, attempt to
+  ;; read it as a number and, if that fails, complain.
+;  lda WORD,y
+;  cmp #$2d          ; minus sign
+;  bne digitcheck
+;  cpy #$1           ; only allowed when y=1
+;  bne nointerpret
+;  bra continue
+;digitcheck
+;  cmp #$30
+;  bcc nointerpret   ; BCC = branch if less than
+;  cmp #$40
+;  bcs nointerpret   ; BCS = branch if greater or equal
+;continue
+;  dey
+;  bne numcheck
 .)
 
   ;; convert number and put it on the stack
@@ -5992,8 +5993,10 @@ continue
 done
 .)
   jsr push16
-  jsr readsign16    ; read a signed number (ie process leading minus)
   ;;jsr readdec16     ; convert it, leave it on the stack
+  ;;jsr readsign16    ; read a signed number (ie process leading minus)
+  jsr readsign
+  bcs nointerpret   ; carry signals failure to read a number
 
 
   ;; if we are compiling, we need to take it off the stack again
@@ -9965,99 +9968,276 @@ crlf
 ;;; double-length.
 ;;;
 
-;; readsign16 looks on the stack for the address of a null-terminated
-;; 16-bit number that might be preceeded with a minus sign.
-readsign16
-.(
+;; Look on the stack for the address of a nul-terminated string.
+;; Try to interpret that string as a number, and leave that number
+;; on the stack. A trailing dot signals that we want it to be a
+;; double. If we can't read a number, the stack will be empty
+;; and we set Carry on exit.
+readsign
   jsr pop16         ; move the string address into stackaccess
 
-  dex               ; make some workspace on the stack. need two 16-byte
-  dex               ; words, one of which will eventually be our result
-  dex               ; so, workspace space is stackbase+1,x to stackbase+4,x
-  dex
-  stz stackbase+1,x ; zero out both 16-bit values
+  sec               ; create space on the stack for two 32-byte
+  txa               ; values.
+  sbc #8
+  tax
+
+  stz stackbase+1,x ; zero out both 32-bit values
   stz stackbase+2,x
   stz stackbase+3,x
   stz stackbase+4,x
+  stz stackbase+5,x
+  stz stackbase+6,x
+  stz stackbase+7,x
+  stz stackbase+8,x
+
+  lda #6            ; how many bytes to drop at the end, ie, whether
+  sta SCRATCH+1     ; we are pushing single or double.
 
   phy               ; preserve y
   ldy #0            ; y indexes digits of the input string
 
+.(
   ;; first, check if the first character is a minus
   lda (stackaccess),y
   cmp #$2d
-  bne nextdigit     ; it is not, so proceed as usual
+  bne checkbase     ; it is not, so proceed as usual
   lda #1            ; set a flag; we'll process this later
   sta SCRATCH
   iny
 
+checkbase
+  lda BASE          ; check if we're reading hexadecimal
+  cmp #16
+  bne nextdigit
+  jmp readhex
+
 nextdigit
   lda (stackaccess),y
+  beq donelastdigit ; ended?
 
-  sec
-  sbc #$30          ; turn from ascii digit into a number
-  clc               ; add it to our partial result
-  adc stackbase+3,x
-  sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
-  iny               ; bump the character count
-  cpy #6            ; was that the last digit? (max 6 inc. minus)
-  beq donelastdigit  
-  lda (stackaccess),y
-  beq donelastdigit ; stop stop if we hit null-terminator
-mult10              ; more digits, so multiply by ten and go around
-  asl stackbase+3,x ; shift left to multiply by two
-  rol stackbase+4,x
+  cmp #$2e          ; dot signals a double
+  bne checkdigit
+  lda #4
+  sta SCRATCH+1
+  bra bumpdigit
 
-  lda stackbase+3,x ; make a copy in the other temporary slot
+checkdigit
+  cmp #$30
+  bcc notnumber
+  cmp #$40
+  bcs notnumber
+  bra processdigit
+notnumber
+  jmp abortnumread
+
+processdigit
+
+  ;; there is a digit to process. First, multiply our partial result
+  ;; by ten (once by 2, once by eight, and then add them).
+
+  asl stackbase+5,x ; shift left to multiply by two
+  rol stackbase+6,x
+  rol stackbase+7,x
+  rol stackbase+8,x
+
+  lda stackbase+5,x ; make a copy in the other temporary slot
   sta stackbase+1,x
-  lda stackbase+4,x
+  lda stackbase+6,x
   sta stackbase+2,x
+  lda stackbase+7,x
+  sta stackbase+3,x
+  lda stackbase+8,x
+  sta stackbase+4,x
+
   asl stackbase+1,x ; shift the copy left twice more, so x8 in total
   rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
   asl stackbase+1,x
   rol stackbase+2,x
+  rol stackbase+3,x
+  rol stackbase+4,x
 
   clc               ; add them (8x + 2x = 10x)
   lda stackbase+1,x
-  adc stackbase+3,x
-  sta stackbase+3,x
+  adc stackbase+5,x
+  sta stackbase+5,x
   lda stackbase+2,x
-  adc stackbase+4,x
-  sta stackbase+4,x
+  adc stackbase+6,x
+  sta stackbase+6,x
+  lda stackbase+3,x
+  adc stackbase+7,x
+  sta stackbase+7,x
+  lda stackbase+4,x
+  adc stackbase+8,x
+  sta stackbase+8,x
 
-  bra nextdigit
+  sec
+  lda (stackaccess),y
+  sbc #$30          ; turn from ascii digit into a number
+  clc               ; add it to our partial result
+  adc stackbase+5,x
+  sta stackbase+5,x
+  lda stackbase+6,x
+  adc #0
+  sta stackbase+6,x
+  lda stackbase+7,x
+  adc #0
+  sta stackbase+7,x
+  lda stackbase+8,x
+  adc #0
+  sta stackbase+8,x
+
+bumpdigit
+  iny               ; bump the character count
+  bra nextdigit     ; and go around again
+.)
+
 donelastdigit
+  ;; finalize the number. this code is the same regardless of base.
   ;; if we began with a minus, then calculate the two's complement
   ;; of the number we have read.
   lda SCRATCH
   beq finishmult    ; no minus flag set
 
-  ;; first, calculate 1's complement -- flip all bits
-  lda stackbase+3,x
-  eor #$ff
-  sta stackbase+3,x
-  lda stackbase+4,x
-  eor #$ff
-  sta stackbase+4,x
-
-  ;; now add 1 to generate the two's complement
+  ;; first, calculate 1's complement -- flip all bits and add one
   clc
-  lda stackbase+3,x
+  lda stackbase+5,x
+  eor #$ff
   adc #1
-  sta stackbase+3,x
-  lda stackbase+4,x
+  sta stackbase+5,x
+  lda stackbase+6,x
+  eor #$ff
   adc #0
-  sta stackbase+4,x
+  sta stackbase+6,x
+  lda stackbase+7,x
+  eor #$ff
+  adc #0
+  sta stackbase+7,x
+  lda stackbase+8,x
+  eor #$ff
+  adc #0
+  sta stackbase+8,x
 
 finishmult
-  inx               ; drop one of the temporary variables
-  inx               ; but leave the other, which is our result
+.(
+  ;; check, are we returning a double or a single celled value?
+  lda SCRATCH+1
+  cmp #4
+  beq cleanup
+  lda stackbase+5,x ; convert double back to a single
+  sta stackbase+7,x
+  lda stackbase+6,x
+  sta stackbase+8,x
+
+cleanup
+  ;; if we need a double, we drop four bytes off the stack. if
+  ;; we need a single, we drop six. that's why we use 4 and 6
+  ;; as our signals in SCRATCH+1
+  txa
+  clc
+  adc SCRATCH+1
+  tax
   ply               ; restore y
 .)
+  clc               ; signal success
   rts
+
+abortnumread
+  clc
+  txa
+  adc #8
+  tax
+  ply
+  sec               ; signal that we couldn't read a number
+  rts
+  
+readhex
+.(
+nexthex
+  lda (stackaccess),y
+  beq doneread
+  cmp #$2e
+  bne checkdigit
+
+  lda #4            ; it was a dot, so make a note and move on
+  sta SCRATCH+1
+  iny
+  bra nexthex
+
+checkdigit
+  ;; not actually doing the check.... oops...
+
+  ;; there is a digit to process. shift our partial result up
+  ;; four bits
+  asl stackbase+5,x ; first shift
+  rol stackbase+6,x
+  rol stackbase+7,x
+  rol stackbase+8,x
+  asl stackbase+5,x ; second shift
+  rol stackbase+6,x
+  rol stackbase+7,x
+  rol stackbase+8,x
+  asl stackbase+5,x ; third shift
+  rol stackbase+6,x
+  rol stackbase+7,x
+  rol stackbase+8,x
+  asl stackbase+5,x ; fourth shift
+  rol stackbase+6,x
+  rol stackbase+7,x
+  rol stackbase+8,x
+
+  ;; convert digit
+.(
+  lda (stackaccess),y
+  cmp #$60
+  bcc isupper
+  ;; lower case character, so substract $57
+  sec
+  sbc #$57
+  bra proceed
+isupper
+  cmp #$40
+  bcc isnumber
+  ;; upper case character, so substract $37
+  sec
+  sbc #$037
+  bra proceed
+isnumber
+  ;; numeric character, so subtract $30
+  sec
+  sbc #$30
+proceed
+.)
+  ;; sanity check?
+  pha
+  and #%11110000
+  beq okay
+  pla
+  jmp abortnumread
+
+okay
+  pla
+  ;; add
+  clc
+  adc stackbase+5,x
+  sta stackbase+5,x
+  lda stackbase+6,x
+  adc #0
+  sta stackbase+6,x
+  lda stackbase+7,x
+  adc #0
+  sta stackbase+7,x
+  lda stackbase+8,x
+  adc #0
+  sta stackbase+8,x
+
+  iny
+  bra nexthex
+doneread
+.)
+  jmp finishmult
+
 
 
 ;;; Print a 16-bit number, interpreted as signed, right-aligned in
