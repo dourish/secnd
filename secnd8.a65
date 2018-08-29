@@ -78,6 +78,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; IOSPACE is the boundary into I/O buffer space
 ;;; 
 ;;;
+BASE=$000E          ; and 000F
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
@@ -100,7 +101,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3500      ; staring address for user code
+USERBASE=$3600      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -1526,7 +1527,6 @@ d166link
 d166code
   .word doexecute
 
-dtop
 d167entry
   .byte 6
   .byte "unused"
@@ -1534,6 +1534,31 @@ d167link
   .word d166entry
 d167code
   .word dounused
+
+d168entry
+  .byte 3
+  .byte "hex"
+d128link
+  .word d167entry
+d128code
+  .word dohex
+
+d169entry
+  .byte 7
+  .byte "decimal"
+d169link
+  .word d168entry
+d169code
+  .word dodecimal
+
+dtop
+d170entry
+  .byte 4
+  .byte "base"
+d170link
+  .word d169entry
+d170code
+  .word dobase
 
 
 ;d101entry
@@ -1632,6 +1657,11 @@ coldstart
   sta DP
   lda #>USERBASE
   sta DP+1
+
+  ;; initialize BASE to 10
+  lda #10
+  sta BASE
+  stz BASE+1
 
   ;; initialize the 6522 for the SD routines
   jsr setup6522
@@ -5529,6 +5559,13 @@ print32u
 
 
 assemble32
+.(
+  lda BASE
+  cmp #16
+  bne continue
+  jmp hassemble32
+continue
+.)
   ;; Open five bytes of storage on the stack. These will be
   ;; ten nybbles each holding a single binary-coded decimal
   ;; digit (since 32 bytes stores a max of a ten-digit decimal).
@@ -5660,6 +5697,7 @@ finalize
 
 
 
+
 ;;;
 ;;; DOUBLE CELL STACK ROUTINES
 ;;;
@@ -5769,6 +5807,23 @@ dounused
   sta stackbase+2,x
   jmp next
 
+dohex
+  lda #16
+  sta BASE
+  jmp next
+
+dodecimal
+  lda #10
+  sta BASE
+  jmp next
+
+dobase
+  lda #<BASE
+  sta stackaccess
+  lda #>BASE
+  sta stackaccess+1
+  jsr push16
+  jmp next
 
 
 ;;;
@@ -10126,10 +10181,17 @@ print16u
   rts
 
 
-;;; print16 is shared by both the signed and unsigned printing
+;;; assemble16 is shared by both the signed and unsigned printing
 ;;; routine. By the time we get here, we should already have
 ;;; printed a space and potentially a minus sign.
 assemble16
+.(
+  lda BASE
+  cmp #16
+  bne continue
+  jmp hassemble16
+continue
+.)
   dex               ; make working space on the stack
   dex
   dex
@@ -10239,6 +10301,95 @@ finalize
 .)
   rts
 
+hassemble16
+  phy
+  ;; number is on the stack
+  ;; output to PADPTR
+  stz SCRATCH       ; signals if there has been any output yet
+
+  inx               ; nasty stack hackery, watch out!
+  jsr h8bits
+  dex
+  jsr h8bits
+
+finalize
+.(
+  ;; if we get to the end and haven't outputted a digit, set 0
+  lda SCRATCH
+  bne done
+  lda #'0
+  sta (PADPTR)
+  inc PADPTR
+done
+.)
+  sec               ; finalize the string count
+  lda PADPTR
+  sbc #<PAD
+  dec               ; remove one
+  sta PAD           ; that's the count
+  ply               ; restore y
+
+  inx               ; assemble pops this from stack (a little weird)
+  inx               ; this should happen in the print routine
+  rts
+
+hassemble32
+  phy
+  stz SCRATCH
+  inx
+  inx
+  inx
+  jsr h8bits
+  dex
+  jsr h8bits
+  dex
+  jsr h8bits
+  dex
+  jsr h8bits
+  inx               ; pop one cell off the stack (finalize will do the
+  inx               ; the other -- this is a mess, clean it up BUG)
+  jmp finalize
+
+
+h8bits
+.(
+  ;; first digit
+  lda stackbase+1,x
+  lsr
+  lsr
+  lsr
+  lsr
+  tay
+  bne continue
+  lda SCRATCH
+  beq nextdigit
+continue
+  lda hextable,y
+  sta (PADPTR)
+  inc PADPTR
+  inc SCRATCH
+nextdigit
+.)
+
+.(
+  ;; second digit
+  lda stackbase+1,x
+  and #15
+  tay
+  bne continue
+  lda SCRATCH
+  beq nextdigit
+continue
+  lda hextable,y
+  sta (PADPTR)
+  inc PADPTR
+  inc SCRATCH
+nextdigit
+.)
+  rts
+
+
+
 ;; print the counted string on the pad and clean up the stack after print
 prpadnum
 .(
@@ -10309,3 +10460,4 @@ readerrormsg:    .byte " read error", $0d, $0a, $00
 writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $0d, $0a, $00
+hextable:	 .byte "0123456789ABCDEF"
