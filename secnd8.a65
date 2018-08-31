@@ -1551,7 +1551,6 @@ d169link
 d169code
   .word dodecimal
 
-dtop
 d170entry
   .byte 4
   .byte "base"
@@ -1560,6 +1559,22 @@ d170link
 d170code
   .word dobase
 
+d171entry
+  .byte 4
+  .byte "char"
+d171link
+  .word d170entry
+d171code
+  .word dochar
+
+dtop
+d172entry
+  .byte %00100110    ; IMM plus count of six
+  .byte "[char]"
+d172link
+  .word d171entry
+d172code
+  .word dobrchar
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2316,15 +2331,15 @@ docreate
   jsr createsub
 
   ldy #1
-  lda #<doloadconst
+  lda #<dovaddr
   sta (DP)
-  lda #>doloadconst
+  lda #>dovaddr
   sta (DP),y
   iny
 
   clc
   lda DP
-  adc #4
+  adc #2
   sta (DP),y
   iny
   lda DP+1
@@ -3164,16 +3179,6 @@ continue
   jsr push16
 
   ;; bump DP by two again (to move to next instruction space)
-;.(
-;  clc
-;  lda DP
-;  adc #2
-;  sta DP
-;  bcc continue
-;  inc DP+1
-;continue
-;.)
-;  jmp next
   jmp incDPby2
 
 nocompile
@@ -4580,6 +4585,8 @@ doupload
 
 ;;; Temporarily switch input to region at location specified on
 ;;; the stack.
+;;; BUG shouldn't flush input. can we preserve the current buffer
+;;; location on the stack and restore it at the end of the load?
 docload
   jsr pop16         ; load address from the stack and set it
   lda stackaccess   ; as the memory region from which to read
@@ -5823,6 +5830,42 @@ dobase
   lda #>BASE
   sta stackaccess+1
   jsr push16
+  jmp next
+
+dochar
+  jsr readnext
+  ldy #1
+  lda WORD,y
+  dex
+  dex
+  sta stackbase+1,x
+  stz stackbase+2,x
+  jmp next  
+  
+dobrchar
+  jsr readnext
+  ldy #0
+  lda #<dolitcode
+  sta (DP),y
+  iny
+  lda #>dolitcode
+  sta (DP),y
+  lda WORD,y        ; Y is currently 1
+  iny
+  sta (DP),y
+  iny
+  lda #0
+  sta (DP),y
+
+.(
+  clc
+  lda DP
+  adc #4
+  sta DP
+  bcc skip
+  inc DP+1
+skip
+.)
   jmp next
 
 
