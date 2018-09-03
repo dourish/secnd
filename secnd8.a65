@@ -1803,7 +1803,6 @@ continue
   jmp (CODEVEC)     ; execute the code for this instruction/word
 
 
-
 ;;; EXIT is the routine that is called at the end of each colon-defined
 ;;; word (it's compiled in as the last address to be called). It undoes
 ;;; DOLIST... it removes an address from the return stack, puts it back
@@ -1818,6 +1817,8 @@ exit
   sta IP+1
 null
   jmp next          ; go execute the next instruction
+
+
 
 
 ;;;
@@ -6032,6 +6033,8 @@ dododoes
   jmp next
 
 
+
+
 ;;;
 ;;; *** TEXT INTERPRETER
 ;;;
@@ -6947,6 +6950,8 @@ returnm1
 .)
   
   
+
+
 ;;;
 ;;; *** SD CARD SUPPORT
 ;;;
@@ -8546,6 +8551,8 @@ recvloop
   rts               ; return with data in A
 
 
+
+
 ;;;
 ;;; *** BUFFER/BLOCK/VIRTUAL MEMORY
 ;;;
@@ -9171,6 +9178,8 @@ doneadd
 .)
 
 
+
+
 ;;;
 ;;; *** SCREEN EDITOR
 ;;;
@@ -9178,7 +9187,6 @@ doneadd
 ;;; Assumes 16 rows of 64 characters to fit with block/buffer size,
 ;;; with nulls filling empty space.
 ;;;
-
 
 ;;; Just for the editor, relabel a bunch of the scratch space.
 temp=SCRATCH
@@ -9316,11 +9324,6 @@ editloop
   dec             ; subtract 1 (to turn it into a 0-ranged value)
   asl             ; shift to multiply by two
   tax             ; that's an offset, so put it in X
-;  lda table,x     ; look up the table value at X
-;  sta jmpvec      ; and store it in jmpvec
-;  lda table+1,x
-;  sta jmpvec+1
-;  jmp (jmpvec)    ; jump to the address
   jmp (table,x)
 
   bra editloop    ; shouldn't need this but included for safety
@@ -10164,6 +10167,8 @@ crlf
   rts
 
 
+
+
 ;;;
 ;;; *** NUMBER READING/PRINTING
 ;;;
@@ -10822,6 +10827,8 @@ endstr
 ;;; reoganize my files...
 putax
   rts
+
+
 
 
 ;;;
