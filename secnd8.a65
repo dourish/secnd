@@ -101,7 +101,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3600      ; staring address for user code
+USERBASE=$3700      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
@@ -1567,7 +1567,6 @@ d171link
 d171code
   .word dochar
 
-dtop
 d172entry
   .byte %00100110    ; IMM plus count of six
   .byte "[char]"
@@ -1575,6 +1574,34 @@ d172link
   .word d171entry
 d172code
   .word dobrchar
+
+d173entry
+  .byte %00100101    ; IMM plus count of five
+  .byte "does>"
+d173link
+  .word d172entry
+d173code
+  .word dodoes
+
+d174entry
+  .byte 6
+  .byte "(does)"
+d174link
+  .word d173entry
+dodoesrtcode
+d174code
+  .word dodoesrt
+
+dtop
+d175entry
+  .byte 6
+  .byte "dodoes"
+d175link
+  .word d174entry
+dododoescode
+d175code
+  .word dododoes
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5866,6 +5893,142 @@ dobrchar
   inc DP+1
 skip
 .)
+  jmp next
+
+;;; dodoes is the compile-time behaviour for DOES>. This is an immediate
+;;; word, so this code runs when a word using DOES> is being compiled.
+;;; It compiles in the run-time code (DOES) and a copy of the current
+;;; instruction pointer (which points to the next instruction to be
+;;; compiled). Oh, is that right? Or should it make a note of the
+;;; DP address? BUG BUG BUG
+dodoes
+  ldy #0
+  lda #<dodoesrtcode  ; first, compile in the code address
+  sta (DP),y
+  iny
+  lda #>dodoesrtcode
+  sta (DP),y
+  iny
+
+  clc                 ; and the parameter address is DP
+  lda DP              ; plus two cells
+  adc #4              ; ie four bytes
+  sta (DP),y
+  iny
+  lda DP+1
+  adc #0
+  sta (DP),y
+  iny
+
+.(
+  tya
+  clc
+  adc DP
+  sta DP
+  bcc skip
+  inc DP+1
+skip
+.)
+  jmp next
+
+
+;;; dodoesrt is the run-time behaviour for (DOES), which is
+;;; compiled by DOES>. This runs when the defining word, which
+;;; creates a word whose behavior is defined using DOES> runs.
+dodoesrt
+  ;; reset the XT of the most recently defined word, which is
+  ;; presumably the one pointer to by DT... is that right? BUG
+  lda DT            ; I think I do this often enough that it
+  sta DPTR          ; should be a subroutine?
+  lda DT+1
+  sta DPTR+1
+.(
+  clc
+  lda DPTR
+  adc (DPTR)        ; add the word length
+  inc               ; plus one byte for the length count
+  inc               ; and two more for the link
+  inc
+  sta DPTR
+  bcc skip
+  inc DPTR+1
+skip
+.)
+  ldy #1
+  lda #<dododoes
+  sta (DPTR)
+  lda #>dododoes
+  sta (DPTR),y
+
+  ;; compile in the parameter that we stored before. this should go
+  ;; into the first parameter space, ie right after that code address
+  ldy #0
+  lda (IP)
+  ldy #2
+  sta (DPTR),y
+  ldy #1
+  lda (IP),y
+  ldy #3
+  sta (DPTR),y
+
+.(
+  ;; bump the IP since I've just used it
+  clc
+  lda IP
+  adc #2
+  sta IP
+  bcc skip
+  inc IP+1
+skip
+.)
+
+  ;; we've reused the lowest cell of storage in this word, so
+  ;; we need to bump DP by one cell to make up for it
+  ;jmp incDPby2
+
+  ;; we don't execute the rest of the word, because it's actually
+  ;; just compiled code to be executed later. Jump straight to exit?
+  jmp exit
+  
+
+;;; dododoes is the run-time behaviour inserted by (DOES) and
+;;; used to execute words constructed using DOES>. dododoes is rather
+;;; like dolist; we will return from it using EXIT, so we need to 
+;;; set up the return stack appropriately.
+dododoes
+  ;; first, push the current instruction pointer onto the
+  ;; return stack (subroutine unrolled)
+  lda IP+1
+  sta (RP)
+  dec RP
+  lda IP
+  sta (RP)
+  dec RP
+
+  ;; next, push the value of the available storage on the stack
+  ;; that's not the usual parameter space, but one value after that
+  ;; since the first slot in the parameter space is being used for
+  ;; the instruction pointer (two cells so four bytes)
+  dex
+  dex
+  clc
+  lda XT
+  adc #4
+  sta stackbase+1,x
+  lda XT+1
+  adc #0
+  sta stackbase+2,x
+
+  ;; now reset IP from the parameter stored here
+  ldy #2
+  lda (XT),y
+  pha
+  iny
+  lda (XT),y
+  sta IP+1
+  pla
+  sta IP
+
   jmp next
 
 
