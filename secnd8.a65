@@ -5946,11 +5946,16 @@ nocompile
 ;;; dodoesrt is the run-time behaviour for (DOES), which is
 ;;; compiled by DOES>. This runs when the defining word, which
 ;;; creates a word whose behavior is defined using DOES> runs.
+;;; it resets the XT of the most recent word, and then takes
+;;; the  parameter that DOES> compiled in, and recodes
+;;; the most recent word to begin execution there (by compiling
+;;; it into the start of the parameter space).
 dodoesrt
-  ;; reset the XT of the most recently defined word, which is
-  ;; presumably the one pointer to by DT... is that right?
-  lda DT            ; I think I do this often enough that it
-  sta DPTR          ; should be a subroutine?
+  ;; find the code field address of the most recently defined
+  ;; word (designated by DT). I think I do this often enough that
+  ;; perhaps it should be a subroutine?
+  lda DT
+  sta DPTR
   lda DT+1
   sta DPTR+1
 .(
@@ -5966,8 +5971,10 @@ dodoesrt
 skip
 .)
 
-  ;; check if the XT is already set to dododoes. If it is, then
-  ;; we can skip to alreadyset
+  ;; we are going to set that address to the code for dodoes, which
+  ;; will necessitate moving any already-allocated storage. however,
+  ;; we don't need to do that if XT is already set to dododoes. so,
+  ;; first check and then jump to either setit or alreadyset.
   ldy #1
   lda (DPTR)  
   cmp #<dododoes
@@ -5977,35 +5984,32 @@ skip
   beq alreadyset  
 
 setit
+  ;; not yet set to dododoes, so set and do the copy
   lda #<dododoes
   sta (DPTR)
   lda #>dododoes
-  sta (DPTR),y
+  sta (DPTR),y      ; y is still 1 here
 
-  ;; BUG BUG
-  ;; now I need to move whatever has been stored here. calculate
-  ;; how much space has been allocated, and then move everything
-  ;; up by two bytes
-  ;; bytes to copy are from DPTR+2 to DP
-  ;; BUG BUG
-  clc               ; base address for copy
-  lda DPTR
+  ;; we need to copy all the allocated space ahead by two bytes.
+  ;; calculate the parameters for the copy.
+  clc               ; first, the base address for copy, 
+  lda DPTR          ; which is the parameter space
   adc #2
   sta SCRATCH
   lda DPTR+1
   adc #0
   sta SCRATCH+1
 
-  clc               ; destination for copy
-  lda SCRATCH
+  clc               ; second, the destination for copy, which
+  lda SCRATCH       ; is source address plus two
   adc #2
   sta SCRATCH+2
   lda SCRATCH+1
   adc #0
   sta SCRATCH+3
 
-  sec               ; number of bytes to copy
-  lda DP
+  sec               ; third, number of bytes to copy, which is
+  lda DP            ; found via DP
   sbc SCRATCH
   sta SCRATCH+4
   lda DP+1
@@ -6027,7 +6031,7 @@ alreadyset
   sta (DPTR),y
 
 .(
-  ;; bump the IP since I've just used it
+  ;; bump the IP since we've just consumed a value
   clc
   lda IP
   adc #2
@@ -6050,14 +6054,16 @@ skip
 .)
 
   ;; we don't execute the rest of the word, because it's actually
-  ;; just compiled code to be executed later. Jump straight to exit?
+  ;; just compiled code to be executed later. Jump straight to exit.
   jmp exit
   
 
 ;;; dododoes is the run-time behaviour inserted by (DOES) and
 ;;; used to execute words constructed using DOES>. dododoes is rather
 ;;; like dolist; we will return from it using EXIT, so we need to 
-;;; set up the return stack appropriately.
+;;; set up the return stack appropriately. unlike dolist, it takes
+;;; a parameter and starts execution there (which is the compiled
+;;; code from the word in which DOES> was originally used).
 dododoes
   ;; first, push the current instruction pointer onto the
   ;; return stack (subroutine unrolled)
@@ -6068,7 +6074,7 @@ dododoes
   sta (RP)
   dec RP
 
-  ;; next, push the value of the available storage on the stack
+  ;; next, push the address of the storage area on the stack
   ;; that's not the usual parameter space, but one value after that
   ;; since the first slot in the parameter space is being used for
   ;; the instruction pointer (two cells so four bytes)
