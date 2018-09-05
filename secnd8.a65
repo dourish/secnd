@@ -2365,15 +2365,18 @@ docreate
   sta (DP),y
   iny
 
-  clc
-  lda DP
-  adc #2
-  sta (DP),y
-  iny
-  lda DP+1
-  adc #0
-  sta (DP),y
-  iny
+;;; BUG With this code commented out, create behaves closer to
+;;; the spec but DOES> goes wrong. Check in more detail what's
+;;; going on.
+;  clc
+;  lda DP
+;  adc #2
+;  sta (DP),y
+;  iny
+;  lda DP+1
+;  adc #0
+;  sta (DP),y
+;  iny
 
 .(
   clc
@@ -2425,7 +2428,7 @@ copynext            ; now copy the rest of the word, backwards
 
 .(
   plp               ; retreive the carry flag
-  bcs continue
+  bcs continue      ; skip to end if carry is set
   ;; set DT to new top entry, the one we've just created here
   lda DP
   sta DT
@@ -5903,6 +5906,11 @@ skip
 ;;; compiled). Oh, is that right? Or should it make a note of the
 ;;; DP address? BUG BUG BUG
 dodoes
+.(
+  lda STATUS
+  bit #COMPILE
+  beq nocompile
+
   ldy #0
   lda #<dodoesrtcode  ; first, compile in the code address
   sta (DP),y
@@ -5921,7 +5929,6 @@ dodoes
   sta (DP),y
   iny
 
-.(
   tya
   clc
   adc DP
@@ -5929,8 +5936,11 @@ dodoes
   bcc skip
   inc DP+1
 skip
-.)
   jmp next
+
+nocompile
+  jmp abortcompile
+.)
 
 
 ;;; dodoesrt is the run-time behaviour for (DOES), which is
@@ -5938,7 +5948,7 @@ skip
 ;;; creates a word whose behavior is defined using DOES> runs.
 dodoesrt
   ;; reset the XT of the most recently defined word, which is
-  ;; presumably the one pointer to by DT... is that right? BUG
+  ;; presumably the one pointer to by DT... is that right?
   lda DT            ; I think I do this often enough that it
   sta DPTR          ; should be a subroutine?
   lda DT+1
@@ -5955,12 +5965,56 @@ dodoesrt
   inc DPTR+1
 skip
 .)
+
+  ;; check if the XT is already set to dododoes. If it is, then
+  ;; we can skip to alreadyset
   ldy #1
+  lda (DPTR)  
+  cmp #<dododoes
+  bne setit
+  lda (DPTR),y
+  cmp #>dododoes
+  beq alreadyset  
+
+setit
   lda #<dododoes
   sta (DPTR)
   lda #>dododoes
   sta (DPTR),y
 
+  ;; BUG BUG
+  ;; now I need to move whatever has been stored here. calculate
+  ;; how much space has been allocated, and then move everything
+  ;; up by two bytes
+  ;; bytes to copy are from DPTR+2 to DP
+  ;; BUG BUG
+  clc               ; base address for copy
+  lda DPTR
+  adc #2
+  sta SCRATCH
+  lda DPTR+1
+  adc #0
+  sta SCRATCH+1
+
+  clc               ; destination for copy
+  lda SCRATCH
+  adc #2
+  sta SCRATCH+2
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+3
+
+  sec               ; number of bytes to copy
+  lda DP
+  sbc SCRATCH
+  sta SCRATCH+4
+  lda DP+1
+  sbc SCRATCH+1
+  sta SCRATCH+5
+
+  jsr movedownsub   ; copy in a downward direction (ie going high to low)
+
+alreadyset
   ;; compile in the parameter that we stored before. this should go
   ;; into the first parameter space, ie right after that code address
   ldy #0
@@ -5983,9 +6037,17 @@ skip
 skip
 .)
 
-  ;; we've reused the lowest cell of storage in this word, so
-  ;; we need to bump DP by one cell to make up for it
-  ;jmp incDPby2
+  ;; increment DP by two to account for the extra cell of storage
+  ;; that we just used at the start
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skip
+  inc DP+1
+skip
+.)
 
   ;; we don't execute the rest of the word, because it's actually
   ;; just compiled code to be executed later. Jump straight to exit?
