@@ -30,7 +30,7 @@
 ;;; v06  cleaning up and debugging, various new words, more internal
 ;;;      elements available to Forth, performance improvements
 ;;; v07  SD card integration, block/buffer implementation, editor
-;;; v08  string routines, cleanup, interpreter work
+;;; v08  string routines, cleanup, interpreter work, create/does>.
 ;;;
 
   * = $0300
@@ -101,7 +101,7 @@ RBASE=$0200         ; base for R-stack
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-USERBASE=$3700      ; staring address for user code
+USERBASE=$3800      ; staring address for user code
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
 LBLOCK=$7C00        ; address of lower I/O data page
