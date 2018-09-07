@@ -7092,8 +7092,22 @@ setup6522
   rts
 
 ;;; Forth word to initialize the SD card and read the boot block.
+;;; all the actual work is in mountsub, though. (This lets me call
+;;; it from other places too.)
 domount
 .(
+  jsr mountsub
+  beq done
+  jmp abortcardfail
+done
+  jmp next
+.)
+
+;;; do the work of mounting a new card. carry on exit signals
+;;; an error.
+mountsub
+.(
+  clc
   stz CURSEC
   stz CURSEC+1
   stz CURSEC+2
@@ -7103,7 +7117,10 @@ domount
   jsr resetsd
   jsr cmd0
   cmp #1
-  bne abortcardfail
+  beq continue
+  sec
+  bra donemount
+continue
 
   jsr sendff
   jsr cmd8
@@ -7122,7 +7139,8 @@ repeat55
 
   dec SCRATCH
   bne repeat55
-  jmp abortcardfail
+  sec
+  bra donemount
 
 success
   jsr sendff
@@ -7147,13 +7165,8 @@ loop
   ldy #0
 .(
 next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   lda initializedmsg,y
   beq done
-;  sta ACIA_DATA
   jsr puta
   iny
   jmp next_char
@@ -7163,20 +7176,15 @@ done
 .(
   ldy #0
 next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   lda MBR_LABEL,y
-;  sta ACIA_DATA
   jsr puta
   iny
   cpy #11
   bne next_char
 .)
 
-done
-  jmp next
+donemount
+  rts
 .)
 
 
@@ -7489,7 +7497,7 @@ gettoken
 
 getblock
 .(
-  ;; get 256 bytes at xx
+  ;; get 256 bytes at LBLOCK
   stz SCRATCH+8
   lda #>LBLOCK
   sta SCRATCH+9
@@ -7500,7 +7508,7 @@ loop
   bne loop
 .)
 .(
-  ;; get 256 bytes at yy
+  ;; get 256 bytes at HBLOCK
   stz SCRATCH+8
   lda #>HBLOCK
   sta SCRATCH+9
@@ -7811,20 +7819,6 @@ dodir
 
 header
   jsr crlf
-;  ldy #0
-;.(
-;next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
-;  lda dirofmsg,y
-;  beq done
-;  sta ACIA_DATA
-;  iny
-;  jmp next_char
-;done
-;.)
   lda #<dirofmsg
   sta PRINTVEC
   lda #>dirofmsg
@@ -7857,6 +7851,8 @@ printdirent         ; print the entry pointed to by SCRATCH+6
 
   lda (SCRATCH+6)
   beq endofdir      ; if it's null, we're done
+  cmp #$e5          ; $e5 indicates file is deleted, so skip it
+  beq nextdirent
 
   ldy #11           ; check for hidden file
   lda (SCRATCH+6),y
