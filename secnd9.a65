@@ -8146,6 +8146,7 @@ continue
 
 
 ;; NOTE this uses SCRATCH+4,5,10,11,12,13,14,15. getblock uses 8,9.
+;; match uses +6 and +7.
 dofload
 
   jsr readnext      ; get next word and put it into input buffer
@@ -8187,6 +8188,23 @@ continue
   lda (SCRATCH+6),y
   sta SCRATCH+15
 
+  ;; set up destination address
+  lda #<IOSPACE
+  sta SCRATCH+10
+  lda #>IOSPACE
+  sta SCRATCH+11
+
+  jsr loadfile
+  jmp next
+
+
+;;; load a file from SD into memory. On entry, the starting block
+;;; is specified on the stack, the length of the file is in
+;;; SCRATCH+12-15, and the address in memory into whic it should be
+;;; copied is in SCRATCH+10-11. (There is no logic to these addresses;
+;;; it's just how the code was originally written before being extracted
+;;; as a subroutine. Return to this for a more logical format?)
+loadfile
   ;; turn block count on stack into sector count, and load the sector
   jsr cltosector
   jsr sdloadblock
@@ -8195,10 +8213,6 @@ continue
   ;; blocks of 256 bytes, but we do so twice because the buffer is
   ;; actually 512 bytes.
   ;; BUG we ignore anything over 32k for the file size
-  lda #<IOSPACE
-  sta SCRATCH+10
-  lda #>IOSPACE
-  sta SCRATCH+11
 
 loadblock
 .(
@@ -8296,7 +8310,8 @@ endfload
   ; null-terminate the load
   lda #0
   sta (SCRATCH+10)
-  jmp next
+  rts
+
   
 
 ;; convert a cluster address into a sector address
@@ -9550,6 +9565,7 @@ donedigit
 .)
 
 
+;; clear the screen
 cls
   lda #$1B  ; esc
   jsr puta
@@ -9561,6 +9577,7 @@ cls
   jsr puta
   rts
 
+;; move cursor to home position
 home
   lda #$1B  ; esc
   jsr puta
@@ -9570,6 +9587,7 @@ home
   jsr puta
   rts
 
+;; clear from current line to bottom of screen
 clrtoend
   lda #$1B  ; ESC
   jsr puta
@@ -9577,10 +9595,11 @@ clrtoend
   jsr puta
   lda #$30  ; 0
   jsr puta
-  lda #$4A ; H
+  lda #$4A  ; J
   jsr puta
   rts
 
+;; move cursor to current position (stored in row/col).
 moveto
   lda #$1B ; ESC
   jsr puta
@@ -9595,6 +9614,25 @@ moveto
   inc
   jsr todecimal
   lda #$48  ; H
+  jsr puta
+  rts
+
+;; add a "+" marker at 65,17 to mark the extent of edit
+;; edit region for forth words (16 rows x 64 chars).
+addmarker
+  lda #$1B ; ESC
+  jsr puta
+  lda #$5B ; [
+  jsr puta
+  lda #17
+  jsr todecimal
+  lda #$3B  ; semic
+  jsr puta
+  lda #65
+  jsr todecimal
+  lda #$48  ; H
+  jsr puta
+  lda #$2b  ; +
   jsr puta
   rts
 
@@ -9826,6 +9864,7 @@ paintnext
 donerepaint
   pla
   sta row
+  jsr addmarker
   jsr moveto
 
 finish
@@ -9892,6 +9931,7 @@ endpaint
   sta col
   pla
   sta row
+  jsr addmarker
   jsr moveto
   rts
 .)
@@ -9917,6 +9957,7 @@ repaint
   jsr cls
   jsr home
   jsr paintdown
+  jsr addmarker
   pla
   sta rowbase+1
   pla
@@ -9925,6 +9966,7 @@ repaint
   sta col
   pla
   sta row
+  jsr addmarker
   jsr moveto
   jmp editloop
 
