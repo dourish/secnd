@@ -17,6 +17,9 @@
 ;;; More of this code than you would expect was written in the
 ;;; United Club at LAX Terminal 7.
 ;;;
+;;; SECND is covered by the Creative Commons CC-BY-4.0 license.
+;;; Code can be shared and adapted but authorship must be acknowledged.
+;;;
 ;;; Paul Dourish, December 2017
 ;;;
 ;;; Version history:
@@ -1652,10 +1655,10 @@ doquitlink
 doquitcode
   .word interploop
 
-;;; BUG for ROM version this needs to be in RAM.
+;;; This needs to be in RAM, so for the ROM version we have to
+;;; set it up.
 setupdummy
 #ifdef ROM
-  ;; put setup code here
 dummy=$0000         ; not using first few bytes BUG move this later!
 dummycode=$0003
 dummyparam=$0005
@@ -2135,9 +2138,6 @@ doemit
   lda stackbase+1,x
   jsr puta
   jmp drop1cell
-;  inx
-;  inx
-;  jmp next
 
 ;;; Implements OVER. We do everything inline here rather than using
 ;;; push and poop.
@@ -2399,19 +2399,6 @@ docreate
   lda #>dovaddr
   sta (DP),y
   iny
-
-;;; BUG With this code commented out, create behaves closer to
-;;; the spec but DOES> goes wrong. Check in more detail what's
-;;; going on.
-;  clc
-;  lda DP
-;  adc #2
-;  sta (DP),y
-;  iny
-;  lda DP+1
-;  adc #0
-;  sta (DP),y
-;  iny
 
 .(
   clc
@@ -5937,9 +5924,8 @@ skip
 ;;; dodoes is the compile-time behaviour for DOES>. This is an immediate
 ;;; word, so this code runs when a word using DOES> is being compiled.
 ;;; It compiles in the run-time code (DOES) and a copy of the current
-;;; instruction pointer (which points to the next instruction to be
-;;; compiled). Oh, is that right? Or should it make a note of the
-;;; DP address? BUG BUG BUG
+;;; next compilation address (which will shortly contain the start of
+;;; the code that was compiled after "DOES>".
 dodoes
 .(
   lda STATUS
@@ -6440,9 +6426,8 @@ return
 
 ;;; readnext
 ;;; read the next word into the area at WORD, potentially refilling
-;;; the entire buffer in the process.
-;;; this is a subroutine so that I can also use it in dovariable,
-;;; although it is mainly used by the text interpreter.
+;;; the entire buffer in the process. this is a subroutine so that
+;;; I can also use it in several other places.
 readnext
   ;; if no more input, ->nomoreinput
 
@@ -6544,6 +6529,10 @@ backspace
   beq readone
   dey                ; if not, go back one character
   jsr puta           ; move cursor back
+  lda #$20           ; output a space
+  jsr puta
+  lda #$08           ; and then another backspace
+  jsr puta
   jmp readone
 
   ;; this is where we land if the line input has finished
@@ -7204,6 +7193,9 @@ abortdiskerror
   lda #>diskerrormsg
   sta PRINTVEC+1
   jsr printvecstr
+  ;; invalidate the sector number cache
+  lda #$ff
+  sta CURSEC+3
   jmp abort
 
 ;;; ABORT with a file error
@@ -7651,7 +7643,7 @@ sdloadnext
 ;;; Save to block specified by double on the stack, translating between
 ;;; number formats.
 sdsaveblock
-
+.(
   jsr sendff
 
   ;; set cs to 0
@@ -7672,10 +7664,24 @@ sdsaveblock
   lda #$95          ; crc, doesn't matter
   jsr sendbyte
 
+.(
   jsr setidle
   jsr getresponse
-  cmp #0
-  bne abortsave
+  cmp #0            ; other things might have messed with Z lately
+  beq continue
+
+;  sta stackaccess   ; print the response code (remove after debugging)
+;  stz stackaccess+1
+;  jsr push16
+;  jsr print16u
+  
+;  lda #$20
+;  jsr puta
+;  lda #$31          ; error code 8
+;  jsr puta
+  bra abortsave
+continue
+.)
 
   jsr sendff
   ;; set cs to 0
@@ -7686,10 +7692,24 @@ sdsaveblock
   jsr sendblock
   jsr setidle
 
+.(
   jsr getresponse
   and #%00001110
   cmp #4
-  bne abortsave
+  beq continue
+
+;  sta stackaccess   ; print the response code (remove after debugging)
+;  stz stackaccess+1
+;  jsr push16
+;  jsr print16u
+
+  lda #$20
+  jsr puta
+  lda #$32          ; error code 2
+  jsr puta
+  bra abortsave
+continue
+.)
 
   ;; now wait until the card is ready again. card will hold the data
   ;; line low while it is processing.
@@ -7709,13 +7729,12 @@ busywait
   lda stackbase+4,x
   sta CURSEC+3
 
-
 finishsave
   inx               ; clean up the stack
   inx
   inx
   inx  
-  clc
+  clc               ; all okay, clear error flag
   rts
 
 abortsave
@@ -7725,6 +7744,7 @@ abortsave
   inx
   sec               ; set flag to signal error
   rts
+.)
 
 sdsavenext
   ;; copy cached block number onto the stack, adding one
@@ -7746,8 +7766,7 @@ sdsavenext
   adc #0
   sta stackbase+4,x
 
-  ;; now jump to regular block load code, skipping cache check
-  ;; (because we know it's different, clearly).
+  ;; now jump to regular block save code
   jmp sdsaveblock
 
 
@@ -7802,7 +7821,7 @@ sdloadroot
 ;;; List files from the root directory
 ;;;
 dodir
-  ;; BUG check that there's a disk mounted and present
+  ;; BUG should check that there's a disk mounted and present
   ;; load the root directory -- just hardcoding location for now
   ;; BUG calculate this properly
   stz stackaccess
@@ -8824,6 +8843,7 @@ clean
   rts
 ;; end of buffersub
 
+
 ;; flush a buffer. on entry, the buffer pointer is in SCRATCH.
 flushbuf
 
@@ -8897,8 +8917,9 @@ copyloop
   bne copyloop
 .)
 
-  ;; write first sector
+  ;; write first sector. removes address from the stack.
   jsr sdsaveblock
+  bcs endflush
 
   ;; copy data for second sector from buffer to I/O space
   inc SCRATCH+3     ; first, bump the source pointer
@@ -8930,6 +8951,7 @@ copyloop
   ;; write second sector
   jsr sdsavenext
 
+endflush
   rts
 ;; end of flushbuf
 
@@ -9150,6 +9172,15 @@ dofirst
 ;;; some Forths, this is called SAVE-BUFFERS
 dosavebufs
   jsr savebufssub
+  bcc endsavebufs
+
+  lda #$43  ; error code three
+  jsr puta
+  lda #$20
+  jsr puta
+
+  jmp abortdiskerror
+endsavebufs
   jmp next
 
 ;;; this is implemented as a subroutine so that it can be called
@@ -9180,6 +9211,7 @@ bufloop
   beq nextbuffer
 
   jsr flushbuf
+  bcs abortsave
 
   ldy #1            ; clear the dirty flag
   lda (SCRATCH),y
@@ -9197,8 +9229,15 @@ nextbuffer
 
   inx               ; clean up the stack
   inx
-.)
+  clc               ; clear carry because no error to signal
   rts
+
+abortsave
+  inx
+  inx
+  sec
+  rts
+.)
 
 doflush
   dex
@@ -10994,8 +11033,8 @@ timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
 initializedmsg:  .byte " initialized ", $00
 diskerrormsg:    .byte " disk error", $0d, $0a, $00
-readerrormsg:    .byte " read error", $0d, $0a, $00
-writeerrormsg:   .byte " write error", $0d, $0a, $00
+;readerrormsg:    .byte " read error", $0d, $0a, $00
+;writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $0d, $0a, $00
 hextable:	 .byte "0123456789ABCDEF"
