@@ -6251,30 +6251,8 @@ execdummy
   ;; we didn't find a match in the dictionary, so see if we can parse
   ;; it as a number.
 nomatch
-  ;; before we do the conversion, check that all the letters are digits
-  ldy WORD
-numcheck
-.(
-  ;; this code currently checks if it's a number first, and, if
-  ;; so, reads it. I want to change this to, instead, attempt to
-  ;; read it as a number and, if that fails, complain.
-;  lda WORD,y
-;  cmp #$2d          ; minus sign
-;  bne digitcheck
-;  cpy #$1           ; only allowed when y=1
-;  bne nointerpret
-;  bra continue
-;digitcheck
-;  cmp #$30
-;  bcc nointerpret   ; BCC = branch if less than
-;  cmp #$40
-;  bcs nointerpret   ; BCS = branch if greater or equal
-;continue
-;  dey
-;  bne numcheck
-.)
 
-  ;; convert number and put it on the stack
+  ;; attempt to convert word to number and put it on the stack
   ;; my routines for this us a null-terminated string, so add a null
   ldy WORD
   iny
@@ -6291,9 +6269,7 @@ numcheck
 done
 .)
   jsr push16
-  ;;jsr readdec16     ; convert it, leave it on the stack
-  ;;jsr readsign16    ; read a signed number (ie process leading minus)
-  jsr readsign
+  jsr readsign      ; read a signed number
   bcs nointerpret   ; carry signals failure to read a number
 
 
@@ -10399,8 +10375,15 @@ readsign
 checkbase
   lda BASE          ; check if we're reading hexadecimal
   cmp #16
-  bne nextdigit
+  bne nextcheck
   jmp readhex
+
+nextcheck
+  lda (stackaccess),y
+  cmp #36           ; dollar sign signals a hex number
+  bne nextdigit     ; no, so proceed as normal
+  iny               ; yes, so skip this character and then
+  jmp readhex       ; read as hex
 
 nextdigit
   lda (stackaccess),y
@@ -10543,12 +10526,22 @@ abortnumread
   sec               ; signal that we couldn't read a number
   rts
   
+
+;;; read multiple-precision hexadecimal number from the string
+;;; pointed to by (stackaccess). y indicates the first character
+;;; we care about (potentially after a sign character).
 readhex
-.(
+  ;; if this first character is a $, discard it
+  lda (stackaccess),y
+  cmp #36
+  bne nexthex
+  iny
 nexthex
+.(
   lda (stackaccess),y
   beq doneread
-  cmp #$2e
+
+  cmp #$2e          ; is it a "."?
   bne checkdigit
 
   lda #4            ; it was a dot, so make a note and move on
@@ -10627,7 +10620,7 @@ okay
   bra nexthex
 doneread
 .)
-  jmp finishmult
+  jmp donelastdigit
 
 
 
