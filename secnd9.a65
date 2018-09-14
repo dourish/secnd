@@ -6153,6 +6153,24 @@ dododoes
 ;;; from the code of the monitor.
 ;;;
 
+;;; This is the warm start address, which does some more setup.
+;;; This updates the highly fluid variables; in fact, this warm-
+;;; start routine is also called by ABORT to reset stacks and
+;;; initiate interpreter interaction.
+warmstart
+  ;; turn off the compiler
+  lda STATUS
+  and #%11111110
+  sta STATUS
+
+  lda #$FF
+  sta RP            ; reset return stack
+  tax               ; reset user stack
+  stz TCNT          ; reset text buffer
+  stz TPTR
+  stz SOURCE        ; return control to terminal
+
+  ;; no jump... we call straight through to interploop below.
 
 ;;; This is the main loop of the interpreter -- which also includes
 ;;; hooks to the compiler, because in Forth those are deeply
@@ -6566,24 +6584,11 @@ endofline
 
 ;;; Implements ABORT. On error, resets and returns to interpreter.
 ;;; BUG doesn't reset DP if we were in the process of compiling, so
-;;; leave a mess in the user space. Most of this is also the
+;;; leave a mess in the user space.
 ;;; warm-start routine.
 abort
   jsr crlf          ; print newline
-warmstart
-  ;; turn off the compiler
-  lda STATUS
-  and #%11111110
-  sta STATUS
-
-  lda #$FF
-  sta RP            ; reset return stack
-  tax               ; reset user stack
-  stz TCNT          ; reset text buffer
-  stz TPTR
-  stz SOURCE        ; return control to terminal
-
-  jmp interploop    ; back to interpreter main loop
+  jmp warmstart     ; reset variables and return to interpreter loop
 
 
 ;;; ABORT with a message about nesting
