@@ -1545,13 +1545,7 @@ d167entry
 d167link
   .word d166entry
 d167code
-  .word dolist
-d167param
-  .word dolitcode
-  .word IOSPACE
-  .word herecode
-  .word minuscode
-  .word exitcode
+  .word dounused
 
 d168entry
   .byte 3
@@ -1765,6 +1759,20 @@ coldstart
 .(
 next_char
   lda greeting,y
+  beq done
+  jsr puta
+  iny
+  jmp next_char
+done
+.)
+
+  ;; print the number of free bytes
+  jsr unusedsub
+  jsr print16u
+  ldy #0
+.(
+next_char
+  lda bytesfree,y
   beq done
   jsr puta
   iny
@@ -5872,17 +5880,21 @@ doexecute
 
   jmp (CODEVEC)     ; execute the code for this instruction/word
 
-;dounused
-;  dex
-;  dex
-;  sec
-;  lda #<IOSPACE
-;  sbc DP
-;  sta stackbase+1,x
-;  lda #>IOSPACE
-;  sbc DP+1
-;  sta stackbase+2,x
-;  jmp next
+dounused
+  jsr unusedsub
+  jmp next
+
+unusedsub
+  dex
+  dex
+  sec
+  lda #<IOSPACE
+  sbc DP
+  sta stackbase+1,x
+  lda #>IOSPACE
+  sbc DP+1
+  sta stackbase+2,x
+  rts
 
 dohex
   lda #16
@@ -7860,6 +7872,8 @@ printdirent         ; print the entry pointed to by SCRATCH+6
   jsr puta
 
   ;; print the file name (and then extension)
+  ;; we always print eight characters for the filename because
+  ;; they are padded with spaces
   ldy #0
 .(
 nextchar
@@ -7883,7 +7897,7 @@ printext            ; now print extension, if there is one
   lda (SCRATCH+6),y
   jsr puta
 
-  lda #8
+  lda #8            ; set up field size parameter for rprint
   sta stackaccess
   stz stackaccess+1
   jsr push16
@@ -10281,39 +10295,20 @@ wait_txd_empty
   rts
 
 okcrlf
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda ok,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
+  lda #<ok
+  sta PRINTVEC
+  lda #>ok
+  sta PRINTVEC+1
+  jsr printvecstr
   rts
-.)
 
 cprompt
-  ldy #0
-.(
-next_char
-wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  lda dots,y
-  beq done
-  sta ACIA_DATA
-  iny
-  jmp next_char
-done
+  lda #<dots
+  sta PRINTVEC
+  lda #>dots
+  sta PRINTVEC+1
+  jsr printvecstr
   rts
-.)
-
 
 crlf
   lda #13
@@ -11030,4 +11025,5 @@ diskerrormsg:    .byte " disk error", $0d, $0a, $00
 ;writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $0d, $0a, $00
+bytesfree:       .byte " bytes free", $00
 hextable:	 .byte "0123456789ABCDEF"
