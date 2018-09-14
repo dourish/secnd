@@ -408,6 +408,7 @@ d29entry
   .byte "-"
 d29link
   .word d28entry
+minuscode
 d29code
   .word dominus
 
@@ -416,6 +417,7 @@ d30entry
   .byte "here"
 d30link
   .word d29entry
+herecode
 d30code
   .word dohere
 
@@ -1543,7 +1545,13 @@ d167entry
 d167link
   .word d166entry
 d167code
-  .word dounused
+  .word dolist
+d167param
+  .word dolitcode
+  .word IOSPACE
+  .word herecode
+  .word minuscode
+  .word exitcode
 
 d168entry
   .byte 3
@@ -1711,9 +1719,6 @@ coldstart
   stz IP
   stz IP+1
 
-  stz STATUS        ; turn off compilation
-  stz SOURCE        ; input from terminal
-
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing downwards, until I have a better idea; I should probably
   ;; combine with some other area because a whole page is much
@@ -1740,12 +1745,6 @@ coldstart
   sta BASE
   stz BASE+1
 
-  ;; initialize the 6522 for the SD routines
-  jsr setup6522
-
-  ;; initialize the dummy word we use for execution
-  jsr setupdummy
-
   ;; initialize pointers and memory for BLOCK code
   stz PREV
   stz PREV+1
@@ -1755,8 +1754,27 @@ coldstart
   sta USE+1
   jsr zerobuffers
 
-  ;; jump to text interpreter
-  jmp startinterp
+  ;; initialize the 6522 for the SD routines
+  jsr setup6522
+
+  ;; initialize the dummy word we use for execution
+  jsr setupdummy
+
+  ;; print a greeting
+  ldy #0
+.(
+next_char
+  lda greeting,y
+  beq done
+  jsr puta
+  iny
+  jmp next_char
+done
+.)
+
+  ;; jump to warm start address, which finishes the job and
+  ;; starts the interpreter
+  jmp warmstart
 
 
 
@@ -4485,7 +4503,6 @@ dotick
   jsr puta
   jsr printword
   jmp abortnotdef
-  jmp abortnotdef
 
 continue
   clc               ; calculate xt. Add length of word, plus one for
@@ -5855,17 +5872,17 @@ doexecute
 
   jmp (CODEVEC)     ; execute the code for this instruction/word
 
-dounused
-  dex
-  dex
-  sec
-  lda #<IOSPACE
-  sbc DP
-  sta stackbase+1,x
-  lda #>IOSPACE
-  sbc DP+1
-  sta stackbase+2,x
-  jmp next
+;dounused
+;  dex
+;  dex
+;  sec
+;  lda #<IOSPACE
+;  sbc DP
+;  sta stackbase+1,x
+;  lda #>IOSPACE
+;  sbc DP+1
+;  sta stackbase+2,x
+;  jmp next
 
 dohex
   lda #16
@@ -6135,30 +6152,6 @@ dododoes
 ;;; This is just something to get us going. Again, much borrowed here
 ;;; from the code of the monitor.
 ;;;
-
-
-;;; initialize the interpreter
-;;;
-startinterp
-
-  ;; set up buffer (nothing to do)
-
-  ;; set up buffer pointer (current pointer within text buffer)
-  stz TPTR
-
-  ;; set up buffer counter (number of characters input)
-  stz TCNT
-
-  ;; print greeting
-  ldy #0
-.(
-next_char
-  lda greeting,y
-  beq interploop
-  jsr puta
-  iny
-  jmp next_char
-.)
 
 
 ;;; This is the main loop of the interpreter -- which also includes
@@ -6573,8 +6566,11 @@ endofline
 
 ;;; Implements ABORT. On error, resets and returns to interpreter.
 ;;; BUG doesn't reset DP if we were in the process of compiling, so
-;;; leave a mess in the user space.
+;;; leave a mess in the user space. Most of this is also the
+;;; warm-start routine.
 abort
+  jsr crlf          ; print newline
+warmstart
   ;; turn off the compiler
   lda STATUS
   and #%11111110
@@ -6587,7 +6583,6 @@ abort
   stz TPTR
   stz SOURCE        ; return control to terminal
 
-  jsr crlf          ; print newline
   jmp interploop    ; back to interpreter main loop
 
 
