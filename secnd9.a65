@@ -92,8 +92,10 @@ BASE=$000E          ; and 000F
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
-XT=$0056            ; and 0057
-CODEVEC=$0058       ; and 0059
+;XT=$0056            ; and 0057
+;CODEVEC=$0058       ; and 0059
+; reserve 0056, 0057
+XT=$0058 ; and 0059
 TPTR=$005A
 TCNT=$005B
 DPTR=$005C          ; and 005D
@@ -1713,6 +1715,9 @@ coldstart
   stz IP
   stz IP+1
 
+  lda #$6c          ; indirect jump instruction
+  sta XT-1          ; to make NEXT work
+
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing downwards, until I have a better idea; I should probably
   ;; combine with some other area because a whole page is much
@@ -1810,7 +1815,8 @@ done
 ;;; to keep track of what's going on.
 
 
-;;; DOLIST is the executing code for a colon-defined word.
+;;; DOLIST is the executing code for a colon-defined word. Also
+;;; known as ENTER in some implementations.
 dolist
   ;; first, push the current instruction pointer onto the
   ;; return stack (subroutine unrolled)
@@ -1848,23 +1854,29 @@ next
   lda (IP),y
   sta XT+1
 
-  ;; increment IP by two bytes (one cell) before we move on
-.(
+  ;; increment IP by two bytes (one cell) and then move on.
+  ;; we need to do a doubly-indirect jump through XT. by having
+  ;; the instruction before XT be the instruction for an indirect
+  ;; jump, we achieve that effect. XT-1 was set to $6C in the
+  ;; cold start routine. the addition and jump are combined to save
+  ;; a cycle in most cases.
+  
   clc
   lda IP
   adc #2
   sta IP
-  bcc continue
+  bcs addupper      ; no carry is the more common case
+  jmp XT-1          ; two JMP instructions saves us a branch
+addupper
   inc IP+1
-continue
-.)
+  jmp XT-1
 
-  lda (XT),y        ; XT contains a pointer to a code word. Load
-  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-  lda (XT)
-  sta CODEVEC
+;  lda (XT),y        ; XT contains a pointer to a code word. Load
+;  sta CODEVEC+1     ; the code address stored there into CODEVEC.
+;  lda (XT)
+;  sta CODEVEC
 
-  jmp (CODEVEC)     ; execute the code for this instruction/word
+;  jmp (CODEVEC)     ; execute the code for this instruction/word
 
 
 ;;; EXIT is the routine that is called at the end of each colon-defined
@@ -5872,13 +5884,14 @@ doexecute
   sta XT+1
   inx
   inx
-  ldy #1
-  lda (XT),y        ; XT contains a pointer to a code word. Load
-  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-  lda (XT)
-  sta CODEVEC
+  jmp XT-1
+;  ldy #1
+;  lda (XT),y        ; XT contains a pointer to a code word. Load
+;  sta CODEVEC+1     ; the code address stored there into CODEVEC.
+;  lda (XT)
+;  sta CODEVEC
 
-  jmp (CODEVEC)     ; execute the code for this instruction/word
+;  jmp (CODEVEC)     ; execute the code for this instruction/word
 
 dounused
   jsr unusedsub
@@ -11005,9 +11018,9 @@ putax
 
 
 #ifdef ROM
-greeting	 .byte "SECND 6502 Forth v09-ROM (Paul Dourish, 2017-12)", $00
+greeting	 .byte "SECND 6502 Forth v09-ROM", $00
 #else
-greeting	 .byte "SECND 6502 Forth v09-RAM (Paul Dourish, 2017-12)", $00
+greeting	 .byte "SECND 6502 Forth v09-RAM", $00
 #endif
 ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
