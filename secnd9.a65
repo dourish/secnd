@@ -88,14 +88,12 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; IOSPACE is the boundary into I/O buffer space
 ;;; 
 ;;;
-BASE=$000E          ; and 000F
+BASE=$000E          ; and 000F (store two bytes but we only use lower)
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
-;XT=$0056            ; and 0057
-;CODEVEC=$0058       ; and 0059
-; reserve 0056, 0057
-XT=$0058 ; and 0059
+; reserve 0056, 0057 (we need 0057 to store a JMP instruction)
+XT=$0058            ; and 0059
 TPTR=$005A
 TCNT=$005B
 DPTR=$005C          ; and 005D
@@ -105,21 +103,23 @@ CWORD=$0061         ; and 0062 (word currently being compiled)
 PADPTR=$0063        ; and 0064 (pointer to text area)
 SOURCE=$0065
 INBUFF=$0066        ; and 0067
-CURSEC=$0068        ; through $0071 (current loaded sector)
-USEBASE=$0072       ; through $0075 (base sector address for block file)
-USE=$0076
-PREV=$0078
+CURSEC=$0068        ; through $006B (current loaded sector)
+USEBASE=$006C       ; through $006F (base sector address for block file)
+USE=$0070           ; and 0071
+PREV=$0072          ; and 0073
+    ;; 0074 through 007F are free
+
 RBASE=$0200         ; base for R-stack
+IOSPACE=$6000       ; start of buffer space
+FIRST=$63E0         ; start of space for blocks/disk buffers
+LBLOCK=$7C00        ; address of lower I/O data page
+HBLOCK=$7D00        ; address of upper I/O data page
 PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
-;USERBASE=$3800      ; staring address for user code
+
 XRECV=$C4DB         ; address of XMODEM subroutine from monitor
 DUMP=$C396          ; address of DUMP subroutine from monitor
-LBLOCK=$7C00        ; address of lower I/O data page
-HBLOCK=$7D00        ; address of upper I/O data page
-IOSPACE=$6000       ; start of buffer space
-FIRST=$63E0         ; start of space for blocks/disk buffers
 
 MBR=$0200           ; cache SD card master boot record in unused stack space
 MBR_NFATS=$0210     ; address of FAT count within cache
@@ -274,7 +274,7 @@ d12entry
 d12link
   .word d11entry
 d12code
-  .word dodiv
+  .word donewdiv
 
 d13entry
   .byte 3
@@ -282,7 +282,7 @@ d13entry
 d13link
   .word d12entry
 d13code
-  .word domod
+  .word donewmod
 
 d14entry
   .byte 1
@@ -972,7 +972,7 @@ d98entry
 d98link
   .word d97entry
 d98code
-  .word dodivmod
+  .word donewdivmod
 
 d99entry
   .byte 6
@@ -1616,7 +1616,6 @@ dododoescode
 d175code
   .word dododoes
 
-
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
 ;  .byte "?do"
@@ -1919,30 +1918,78 @@ dotimes
   jsr mult16
   jmp next
 
-dodiv
-  jsr div16
+;dodiv
+;  jsr div16
+;  jmp next
+
+newdivmodsub
+.(
+  dex               ; make space on the stack
+  dex
+  lda 3,x           ; copy 16-bit value into the new top of stack
+  sta 1,x
+  lda 4,x
+  sta 2,x
+
+  lda 5,x           ; now convert next-to-top to 32 bits. start
+  sta 3,x           ; by copying the two bytes we have into the
+  lda 6,x           ; new lower positions
+  sta 4,x
+
+  bit 4,x           ; test the sign bit and sign-extend into the
+  bpl dozero        ; upper two bytes.
+  lda #$ff          ; negative, so fill with ones.
+  sta 5,x
+  sta 6,x
+  bra continue
+dozero
+  stz 5,x           ; positive, so fill with zeros
+  stz 6,x
+continue
+  jsr smdivmodsub
+  rts
+.)    
+
+donewdiv
+  jsr newdivmodsub
+  lda 1,x
+  sta 3,x
+  lda 2,x
+  sta 4,x
+  inx               ; BUG replce with drop1cell
+  inx
   jmp next
 
-domod
-  jsr mod16
+;domod
+;  jsr mod16
+;  jmp next
+
+donewmod
+  jsr newdivmodsub
+  inx               ; BUG replace with drop1cell
+  inx
   jmp next
 
-dodivmod
-  jsr divmod16
-  ;; that leaves the stack in a bit of a mess. clean up.
-  lda stackbase+1,x ; move modulus from +1 and +3 to +7 and +8
-  sta stackbase+7,x
-  lda stackbase+2,x
-  sta stackbase+8,x
-  lda stackbase+3,x ; move quotient from +3 and +4 to +5 and +6
-  sta stackbase+5,x
-  lda stackbase+4,x
-  sta stackbase+6,x
-drop2cells
-  inx               ; drop working values off the stack, leaving
-  inx               ; modulos and quotient in the right places
-  inx
-  inx
+;dodivmod
+;  jsr divmod16
+;  ;; that leaves the stack in a bit of a mess. clean up.
+;  lda stackbase+1,x ; move modulus from +1 and +3 to +7 and +8
+;  sta stackbase+7,x
+;  lda stackbase+2,x
+;  sta stackbase+8,x
+;  lda stackbase+3,x ; move quotient from +3 and +4 to +5 and +6
+;  sta stackbase+5,x
+;  lda stackbase+4,x
+;  sta stackbase+6,x
+;drop2cells
+;  inx               ; drop working values off the stack, leaving
+;  inx               ; modulos and quotient in the right places
+;  inx
+;  inx
+;  jmp next
+
+donewdivmod
+  jsr newdivmodsub
   jmp next
 
 doprint16
@@ -4801,12 +4848,13 @@ doadd32
   lda stackbase+4,x ; byte #4
   adc stackbase+8,x
   sta stackbase+8,x
-;  inx               ; drop the upper two-cell number
-;  inx
-;  inx
-;  inx
-;  jmp next          ; done
-  jmp drop2cells
+drop2cells
+  inx               ; drop the upper two-cell number
+  inx
+  inx
+  inx
+  jmp next          ; done
+
 
 ;;; mixed-length addition. Add a 16-bit wide number on the top of
 ;;; the stack to a 32-bit wide number below it.
