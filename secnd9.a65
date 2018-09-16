@@ -274,7 +274,7 @@ d12entry
 d12link
   .word d11entry
 d12code
-  .word donewdiv
+  .word dodiv
 
 d13entry
   .byte 3
@@ -282,7 +282,7 @@ d13entry
 d13link
   .word d12entry
 d13code
-  .word donewmod
+  .word domod
 
 d14entry
   .byte 1
@@ -972,7 +972,7 @@ d98entry
 d98link
   .word d97entry
 d98code
-  .word donewdivmod
+  .word dodivmod
 
 d99entry
   .byte 6
@@ -1918,11 +1918,11 @@ dotimes
   jsr mult16
   jmp next
 
-;dodiv
-;  jsr div16
-;  jmp next
-
-newdivmodsub
+;;; This routine is shared between /, MOD, and /MOD. All three use
+;;; SM/REM to do the division, but SM/REM requires the dividend to
+;;; be a double-value. This massages the input so that it's correct
+;;; before doing the division.
+divmodsub
 .(
   dex               ; make space on the stack
   dex
@@ -1946,50 +1946,24 @@ dozero
   stz 5,x           ; positive, so fill with zeros
   stz 6,x
 continue
-  jsr smdivmodsub
+  jsr smdivmodsub   ; actual division happens here
   rts
 .)    
 
-donewdiv
-  jsr newdivmodsub
+dodiv
+  jsr divmodsub
   lda 1,x
   sta 3,x
   lda 2,x
   sta 4,x
-  inx               ; BUG replce with drop1cell
-  inx
-  jmp next
+  jmp drop1cell
 
-;domod
-;  jsr mod16
-;  jmp next
+domod
+  jsr divmodsub
+  jmp drop1cell
 
-donewmod
-  jsr newdivmodsub
-  inx               ; BUG replace with drop1cell
-  inx
-  jmp next
-
-;dodivmod
-;  jsr divmod16
-;  ;; that leaves the stack in a bit of a mess. clean up.
-;  lda stackbase+1,x ; move modulus from +1 and +3 to +7 and +8
-;  sta stackbase+7,x
-;  lda stackbase+2,x
-;  sta stackbase+8,x
-;  lda stackbase+3,x ; move quotient from +3 and +4 to +5 and +6
-;  sta stackbase+5,x
-;  lda stackbase+4,x
-;  sta stackbase+6,x
-;drop2cells
-;  inx               ; drop working values off the stack, leaving
-;  inx               ; modulos and quotient in the right places
-;  inx
-;  inx
-;  jmp next
-
-donewdivmod
-  jsr newdivmodsub
+dodivmod
+  jsr divmodsub
   jmp next
 
 doprint16
