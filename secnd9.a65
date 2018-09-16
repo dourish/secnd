@@ -42,7 +42,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$3800
+USERBASE=$3600
 #endif
 
 ;;;
@@ -1931,8 +1931,15 @@ dominus
   jmp next
 
 dotimes
-  jsr mult16
-  jmp next
+;  jsr mult16
+  jsr multmixsub
+  ;; that produces a 32-bit value, so ignore the upper bytes and
+  ;; just copy lower bytes over them
+  lda 1,x
+  sta 3,x
+  lda 2,x
+  sta 4,x
+  jmp drop1cell
 
 ;;; This routine is shared between /, MOD, and /MOD. All three use
 ;;; SM/REM to do the division, but SM/REM requires the dividend to
@@ -9435,7 +9442,7 @@ table
   .word undefined   ; q
   .word undefined   ; r
   .word undefined   ; s
-  .word testcode    ; t
+  .word undefined   ; t
   .word undefined   ; u
   .word undefined   ; v
   .word undefined   ; w
@@ -9532,12 +9539,10 @@ editloop
   dec             ; subtract 1 (to turn it into a 0-ranged value)
   asl             ; shift to multiply by two
   tax             ; that's an offset, so put it in X
-  jmp (table,x)
-
-  bra editloop    ; shouldn't need this but included for safety
+  jmp (table,x)   ; invoke the command
 
 notcmd
-  jsr insert
+  jsr insert      ; not a command, so insert the character
   bra editloop
 
 escape
@@ -9636,6 +9641,7 @@ donebackword
 
 
 ;; for small integers (<100), convert to decimal and output
+;; use this for the ansi codes for positioning
 todecimal
 .(
   ldy #$30
@@ -9964,7 +9970,7 @@ donerepaint
 finish
   jmp editloop
 
-breakline ;; TO BE IMPLEMENTED
+breakline ;; BUG   TO BE IMPLEMENTED
   jmp editloop
 
 
@@ -10275,10 +10281,6 @@ endedit
   jsr moveto
   rts
 
-testcode
-  jsr clrtoend
-  jmp editloop
-
 getchar
   lda ACIA_STATUS
   and #$08
@@ -10343,8 +10345,7 @@ doneadd
 
 
 ;;;
-;;; USER I/O SUPPORT ROUTINES
-;;; These have been "borrowed" from mitemon
+;;; *** USER I/O SUPPORT ROUTINES
 ;;;
 
 puta
@@ -10391,8 +10392,6 @@ crlf
 ;;; Various conversions to read and print variously-sized numbers
 ;;; in various formats.
 ;;;
-;;; BUG still to do: read numbers with trailing periods as
-;;; double-length.
 ;;;
 
 ;; Look on the stack for the address of a nul-terminated string.
@@ -10683,10 +10682,9 @@ doneread
   jmp donelastdigit
 
 
-
-;;; Print a 16-bit number, interpreted as signed, right-aligned in
-;;; a field that is as wide as specified on the stack.
-rprint16s
+;;; this routine to set up the PADPTR is shared by all the
+;;; printing routines
+initpadptr
   ;; Initialize the PADPTR. We will assemble the string on the
   ;; pad. Leave one space for a count.
   lda #<PAD
@@ -10694,6 +10692,12 @@ rprint16s
   sta PADPTR
   lda #>PAD         ; no carry; presume no page boundary
   sta PADPTR+1
+  rts
+
+;;; Print a 16-bit number, interpreted as signed, right-aligned in
+;;; a field that is as wide as specified on the stack.
+rprint16s
+  jsr initpadptr
 
 .(
   ;; next, check the most significant bit of the number
@@ -10746,13 +10750,7 @@ printnum
 ;;; unsigned print routine and with the right-aligned printing.
 ;;;
 print16s
-  ;; Initialize the PADPTR. We will assemble the string on the
-  ;; pad. Leave one space for a count.
-  lda #<PAD
-  inc               ; space for the count
-  sta PADPTR
-  lda #>PAD         ; no carry; presume no page boundary
-  sta PADPTR+1
+  jsr initpadptr
 
 .(
   ;; next, check the most significant bit of the number
@@ -10789,15 +10787,8 @@ nominus
 ;;; Most of the code here is shared with the signed printing
 ;;; routine too.
 print16u
-  ;; Initialize the PADPTR. We will assemble the string on the
-  ;; pad. Leave one space for a count.
-  lda #<PAD
-  inc               ; space for the count
-  sta PADPTR
-  lda #>PAD         ; no carry; presume no page boundary
-  sta PADPTR+1
+  jsr initpadptr
 
-  ; jmp pr16       ; commented out because we can just fall through
   jsr assemble16    ; assemble a 16-bit number on the pad
   lda #$20
   jsr puta
