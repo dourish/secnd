@@ -1606,7 +1606,6 @@ dodoesrtcode
 d174code
   .word dodoesrt
 
-dtop
 d175entry
   .byte 6
   .byte "dodoes"
@@ -1615,6 +1614,23 @@ d175link
 dododoescode
 d175code
   .word dododoes
+
+d176entry
+  .byte 2
+  .byte "2/"
+d176link
+  .word d175entry
+d176code
+  .word dotwodiv
+
+dtop
+d177entry
+  .byte 2
+  .byte "2*"
+d177link
+  .word d176entry
+d177code
+  .word dotwotimes
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1965,6 +1981,20 @@ domod
 dodivmod
   jsr divmodsub
   jmp next
+
+dotwotimes
+.(
+  asl stackbase+1,x ; shift the word left
+  rol stackbase+2,x
+  jmp next
+.)
+
+dotwodiv
+  lda stackbase+2,x
+  cmp #128          ; sets carry to top bit, for sign extension
+  ror stackbase+2,x
+  ror stackbase+1,x
+  jmp next  
 
 doprint16
   jsr print16s
