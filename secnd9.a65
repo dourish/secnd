@@ -10422,7 +10422,6 @@ readsign
   phy               ; preserve y
   ldy #0            ; y indexes digits of the input string
 
-.(
   ;; first, check if the first character is a minus
   lda (stackaccess),y
   cmp #$2d
@@ -10440,11 +10439,19 @@ checkbase
 nextcheck
   lda (stackaccess),y
   cmp #36           ; dollar sign signals a hex number
-  bne nextdigit     ; no, so proceed as normal
+  bne checkhash     ; no, so proceed as normal
   iny               ; yes, so skip this character and then
   jmp readhex       ; read as hex
 
+checkhash           ; if there's a #, ignore it
+  lda (stackaccess),y
+  cmp #$23
+  bne nextdigit
+  iny
+
+readdecimal
 nextdigit
+.(
   lda (stackaccess),y
   beq donelastdigit ; ended?
 
@@ -10590,8 +10597,16 @@ abortnumread
 ;;; pointed to by (stackaccess). y indicates the first character
 ;;; we care about (potentially after a sign character).
 readhex
-  ;; if this first character is a $, discard it
+  ;; if the first character is a hash, read as a decimal
   lda (stackaccess),y
+  cmp #$23
+  bne checkdollar
+  iny
+  jmp readdecimal
+  
+checkdollar
+  ;; if this first character is a $, discard it
+;  lda (stackaccess),y
   cmp #36
   bne nexthex
   iny
@@ -10977,13 +10992,13 @@ h8bits
   tay
   bne continue
   lda SCRATCH
-  beq nextdigit
+  beq nextchar
 continue
   lda hextable,y
   sta (PADPTR)
   inc PADPTR
   inc SCRATCH
-nextdigit
+nextchar
 .)
 
 .(
@@ -10993,13 +11008,13 @@ nextdigit
   tay
   bne continue
   lda SCRATCH
-  beq nextdigit
+  beq nextchar
 continue
   lda hextable,y
   sta (PADPTR)
   inc PADPTR
   inc SCRATCH
-nextdigit
+nextchar
 .)
   rts
 
