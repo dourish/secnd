@@ -1944,7 +1944,6 @@ dominus
   jmp next
 
 dotimes
-;  jsr mult16
   jsr multmixsub
   ;; that produces a 32-bit value, so ignore the upper bytes and
   ;; just copy lower bytes over them
@@ -5435,55 +5434,40 @@ done
 
 
 
-dostardiv
-  jsr pop16         ; temporarily move divisor out of the way
-  lda stackaccess
-  pha
-  lda stackaccess+1
-  pha
+stardivshared
+  lda stackbase+1,x ; move the divisor out of the way temporarily
+  sta stackaccess
+  lda stackbase+2,x
+  sta stackaccess+1
+  inx
+  inx
   jsr multmixsub    ; do the multiplication
   dex
   dex
-  pla               ; put the divisor back
+  lda stackaccess+1 ; put the divisor back
   sta stackbase+2,x
-  pla
+  lda stackaccess
   sta stackbase+1,x
+  rts
+
+dostardiv
+  jsr stardivshared
   jsr divmixsub     ; do the division
   jmp next
 
 ;; this is exactly dostardiv, but with a different division call
-;; to get me the modulus too. Is there a better way to share code
-;; between these two?
+;; to get me the modulus too.
 dostardivmod
-  jsr pop16         ; temporarily move divisor out of the way
-  lda stackaccess
-  pha
-  lda stackaccess+1
-  pha
-  jsr multmixsub    ; do the multiplication
-  dex
-  dex
-  pla               ; put the divisor back
-  sta stackbase+2,x
-  pla
-  sta stackbase+1,x
+  jsr stardivshared
   jsr smdivmodsub   ; do the division
   jmp next
 
-
-;;; BUG there is an awful lot of code shared between rprint32
-;;; and print32. Can all the setup stuff be broken out?
-rprint32s
-  ;; Initialize the PADPTR. We will assemble the string on the
-  ;; pad. Leave one space for a count.
-  lda #<PAD
-  inc               ; space for the count
-  sta PADPTR
-  lda #>PAD         ; no carry; presume no page boundary
-  sta PADPTR+1
-
+;; this is used by both print32s and rprint32s. Test the sign of the
+;; number being printed, and if it's negative, output a minus and
+;; prepare the number for unsigned processing
+handlesign32
 .(
-  ;; next, check the most significant bit of the number
+  ;; check the most significant bit of the number
   ;; to see if it's negative
   lda stackbase+4,x
   bit #%10000000
@@ -5514,7 +5498,15 @@ rprint32s
   sta stackbase+4,x
 
 nominus
+  rts
 .)
+
+
+;;; BUG there is an awful lot of code shared between rprint32
+;;; and print32. Can all the setup stuff be broken out?
+rprint32s
+  jsr initpadptr    ; set up PADPTR
+  jsr handlesign32  ; handle if number is negative
   jsr assemble32    ; assemble the 32-bit number on the pad
   jsr pop16         ; pull the field width (presume < 256)
   phy
@@ -5543,60 +5535,14 @@ printnum
 ;;; I used for 16-bits was messy enough, but this is messier now that
 ;;; I've extended it. (Updated to handle negative numbers.)
 print32s
-  ;; Initialize the PADPTR. We will assemble the string on the
-  ;; pad. Leave one space for a count.
-  lda #<PAD
-  inc               ; space for the count
-  sta PADPTR
-  lda #>PAD         ; no carry; presume no page boundary
-  sta PADPTR+1
-
-.(
-  ;; next, check the most significant bit of the number
-  ;; to see if it's negative
-  lda stackbase+4,x
-  bit #%10000000
-  beq nominus
-
-  lda #$2d          ; minus sign
-  sta (PADPTR)      ; add it to the string we're assembling
-  inc PADPTR
-
-  ;; now calculate the two's complement of the number we have.
-  ;; flip all the bits and add one.
-  clc
-  lda stackbase+1,x
-  eor #$ff
-  adc #1
-  sta stackbase+1,x
-  lda stackbase+2,x
-  eor #$ff
-  adc #0
-  sta stackbase+2,x
-  lda stackbase+3,x
-  eor #$ff
-  adc #0
-  sta stackbase+3,x
-  lda stackbase+4,x
-  eor #$ff
-  adc #0
-  sta stackbase+4,x
-
-nominus
-  jsr assemble32
-  lda #$20
-  jsr puta
-  jsr prpadnum
-.)
-  rts
+  jsr initpadptr    ; set up PADPTR
+  jsr handlesign32  ; handle if number is negative
+  bra sharedprint32
 
 ;;; unsigned version
 print32u
-  lda #<PAD
-  inc               ; space for the count
-  sta PADPTR
-  lda #>PAD         ; no carry; presume no page boundary
-  sta PADPTR+1
+  jsr initpadptr    ; set up PADPTR
+sharedprint32
   jsr assemble32
   lda #$20
   jsr puta
@@ -5765,11 +5711,6 @@ do2dup
   jmp next
 
 do2drop
-;  inx
-;  inx
-;  inx
-;  inx
-;  jmp next
   jmp drop2cells
 
 do2over
@@ -5835,13 +5776,6 @@ doexecute
   inx
   inx
   jmp XT-1
-;  ldy #1
-;  lda (XT),y        ; XT contains a pointer to a code word. Load
-;  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-;  lda (XT)
-;  sta CODEVEC
-
-;  jmp (CODEVEC)     ; execute the code for this instruction/word
 
 dounused
   jsr unusedsub
