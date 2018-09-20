@@ -10566,13 +10566,11 @@ initpadptr
   sta PADPTR+1
   rts
 
-;;; Print a 16-bit number, interpreted as signed, right-aligned in
-;;; a field that is as wide as specified on the stack.
-rprint16s
-  jsr initpadptr
-
+;;; this routine to handle the sign of a 16-bit number is shared by
+;;; print16s and rprint16s. similar to handlesign32 but for 16-bits.
+handlesign16
 .(
-  ;; next, check the most significant bit of the number
+  ;; check the most significant bit of the number
   ;; to see if it's negative
   lda stackbase+2,x
   bit #%10000000
@@ -10594,7 +10592,14 @@ rprint16s
   adc #0
   sta stackbase+2,x
 nominus
+  rts
 .)
+
+;;; Print a 16-bit number, interpreted as signed, right-aligned in
+;;; a field that is as wide as specified on the stack.
+rprint16s
+  jsr initpadptr
+  jsr handlesign16
   jsr assemble16    ; assemble a 16-bit number on the pad
   jsr pop16         ; pull the field width (presume < 256)
   phy
@@ -10623,44 +10628,15 @@ printnum
 ;;;
 print16s
   jsr initpadptr
-
-.(
-  ;; next, check the most significant bit of the number
-  ;; to see if it's negative
-  lda stackbase+2,x
-  bit #%10000000
-  beq nominus
-
-  lda #$2d          ; minus sign
-  sta (PADPTR)      ; add it to the string we're assembling
-  inc PADPTR
-
-  ;; now calculate the two's complement of the number we have.
-  ;; flip all the bits and add one.
-  clc
-  lda stackbase+1,x
-  eor #$ff
-  adc #1
-  sta stackbase+1,x
-  lda stackbase+2,x
-  eor #$ff
-  adc #0
-  sta stackbase+2,x
-nominus
-.)
-  jsr assemble16    ; assemble a 16-bit number on the pad
-  lda #$20
-  jsr puta
-  jsr prpadnum      ; print it
-  rts
-
+  jsr handlesign16
+  bra sharedprint16
 
 ;;; Print a 16-bit quantity interpreted as an unsigned number.
 ;;; Most of the code here is shared with the signed printing
 ;;; routine too.
 print16u
   jsr initpadptr
-
+sharedprint16
   jsr assemble16    ; assemble a 16-bit number on the pad
   lda #$20
   jsr puta
