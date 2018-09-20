@@ -1771,6 +1771,10 @@ coldstart
   ;; initialize the 6522 for the SD routines
   jsr setup6522
 
+  ;; mark USEBASE as invalid
+  lda #$ff
+  sta USEBASE+3
+
   ;; initialize the dummy word we use for execution
   jsr setupdummy
 
@@ -6706,6 +6710,10 @@ abortnotdef
 ;;; LIST prints a disk block to the screen
 dolistword
 .(
+  lda USEBASE+3     ; is there a block file set up?
+  beq continue
+  jmp abortusing
+continue
   jsr blocksub
   lda stackbase+1,x
   sta SCRATCH
@@ -6752,6 +6760,12 @@ doneadd
 
 ;;; load input from a disk block
 doload
+.(
+  lda USEBASE+3     ; is there a block file set up?
+  beq continue
+  jmp abortusing
+continue
+.)
   jsr blocksub      ; find/load the block, leave address on stack
   jmp docload       ; do regular character load with address
 
@@ -7157,10 +7171,13 @@ done
 mountsub
 .(
   clc
-  stz CURSEC
+  stz CURSEC        ; reset the sector cache
   stz CURSEC+1
   stz CURSEC+2
   stz CURSEC+3
+
+  lda #$FF          ; reset USEBASE. Top byte should always be zero,
+  sta USEBASE+3     ; so FF signals invalid.
 
   ;; BUG should test for card present
   jsr resetsd
@@ -7263,6 +7280,15 @@ abortnofile
   lda #<nofilemsg
   sta PRINTVEC
   lda #>nofilemsg
+  sta PRINTVEC+1
+  jsr printvecstr
+  jmp abort
+
+;;; ABORT with a USING file error
+abortusing
+  lda #<usingerrormsg
+  sta PRINTVEC
+  lda #>usingerrormsg
   sta PRINTVEC+1
   jsr printvecstr
   jmp abort
@@ -9021,8 +9047,12 @@ endflush
 ;;; BLOCK finds a buffer allocated for the block given on the stack
 ;;; and loads it into memory.
 doblock
+  lda USEBASE+3     ; check whether we are USING a file
+  bne blockerr
   jsr blocksub
   jmp next
+blockerr
+  jmp abortusing
 
 ;;; The actual functionality of BLOCK is broken out into this
 ;;; subroutine so that it can be easily incorporated into
@@ -9455,6 +9485,12 @@ table
 ;;; block to be edited, so we start by calling block to load
 ;;; it and determine the buffer address.
 doedit
+.(
+  lda USEBASE+3     ; is there a block file set up?
+  beq continue
+  jmp abortusing
+continue
+.)
   jsr blocksub
   lda stackbase+1,x
   sta TEXTBASE
@@ -11089,12 +11125,13 @@ exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
 inityesmsg:      .byte " initialized", $0d, $0a, $00
 initnosmsg:      .byte " initialization failed", $0d, $0a, $00
 timeoutmsg:      .byte " timeout", $0d, $0a, $00
-cardfailmsg:     .byte " couldn't initialize card", $0d, $0a, $00
+cardfailmsg:     .byte " couldn't initialize card", $00
 initializedmsg:  .byte " initialized ", $00
-diskerrormsg:    .byte " disk error", $0d, $0a, $00
+usingerrormsg:   .byte " not USING block file", $00
+diskerrormsg:    .byte " disk error", $00
 ;readerrormsg:    .byte " read error", $0d, $0a, $00
 ;writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
-nofilemsg:       .byte " no such file", $0d, $0a, $00
+nofilemsg:       .byte " no such file", $00
 bytesfree:       .byte " bytes free", $00
 hextable:	 .byte "0123456789ABCDEF"
