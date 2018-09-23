@@ -107,8 +107,7 @@ CURSEC=$0068        ; through $006B (current loaded sector)
 USEBASE=$006C       ; through $006F (base sector address for block file)
 USE=$0070           ; and 0071
 PREV=$0072          ; and 0073
-    ;; 0074 through 007F are free
-
+USENAME=$0074       ; through 007F
 RBASE=$0200         ; base for R-stack
 IOSPACE=$6000       ; start of buffer space
 FIRST=$63E0         ; start of space for blocks/disk buffers
@@ -1631,7 +1630,6 @@ d177link
 d177code
   .word dotwotimes
 
-dtop
 d178entry
   .byte 5
   .byte "*/mod"
@@ -1639,6 +1637,15 @@ d178link
   .word d177entry
 d178code
   .word dostardivmod
+
+dtop
+d179entry
+  .byte 6
+  .byte "using?"
+d179link
+  .word d178entry
+d179code
+  .word dousingq
 
 
 ;d101entry
@@ -2403,9 +2410,6 @@ docfetch
   sta stackaccess+1
   lda (stackaccess) ; grab single byte at the address
   sta stackbase+1,x ; and store in LSB
-  jsr pop16         ; pop address into stackaccess
-  dex               ; make space on the stack
-  dex
   stz stackbase+2,x ; set MSB to zero
   jmp next
 
@@ -2467,12 +2471,11 @@ dovariable
   clc               ; indicates we want create to update DT
   jsr createsub     ; use CREATE to set up new dictionary entry
 
-  ldy #0
+  ldy #1
 
   ;; set code to dovaddr
   lda #<dovaddr
-  sta (DP),y
-  iny
+  sta (DP)
   lda #>dovaddr
   sta (DP),y
   iny
@@ -2587,12 +2590,11 @@ doconstant
   clc               ; signals that create should update DT
   jsr createsub     ; use CREATE to set up new dictionary entry
 
-  ldy #0
+  ldy #1
 
   ;; set code to doloadconst
   lda #<doloadconst ; one of only two lines different from above
-  sta (DP),y
-  iny
+  sta (DP)
   lda #>doloadconst ; and this is the other one
   sta (DP),y
   iny
@@ -2657,21 +2659,7 @@ dobye
   lda #>exitmsg
   sta PRINTVEC+1
   jsr printvecstr
-;  ldy #0
-;.(
-;next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
-;  lda exitmsg,y
-;  beq done
-;  sta ACIA_DATA
-;  iny
-;  jmp next_char
-;done
-;.)
-  rts
+  rts               ; return to whatever started FORTH
 
 ;;; rcopy (for the Forth word "R") -- copy top of R stack onto data stack
 ;;; this code also implements I (since it's the same thing).
@@ -2770,12 +2758,11 @@ docolon
   sec               ; signals that create shouldn't update DT
   jsr createsub
 
-  ldy #0
+  ldy #1
 
   ;; set code to dolist
   lda #<dolist
-  sta (DP),y
-  iny
+  sta (DP)
   lda #>dolist
   sta (DP),y
   iny
@@ -2800,10 +2787,9 @@ dosemic
   sta STATUS
 
   ;; add call to exit at the end of the entry
-  ldy #0
+  ldy #1
   lda #<exitcode
-  sta (DP),y
-  iny
+  sta (DP)
   lda #>exitcode
   sta (DP),y
 
@@ -5268,19 +5254,19 @@ umstarsub
   CLC 
   LDA 3,X    ;Copy TOS value to N+2,N+3. To eliminate CLC inside the loop, the
   SBC #0
-  STA SCRATCH+3    ;special accommodation is mandatory for the case of TOS = 0.
+  STA SCRATCH+3     ;special accommodation mandatory for the case of TOS = 0.
   LDA 4,X
   SBC #0
-  BCC UST_Z  ;TOS = 0? Mandatory special treatment for this
+  BCC UST_Z         ; TOS = 0? Mandatory special treatment for this
   STA SCRATCH+4
   LDA #0
-  STA SCRATCH+1      ;16 bits of zero in A, N
-  STX SCRATCH+5    ;tested later for exit from outer loop
-  DEX        ;bias applied to X
+  STA SCRATCH+1     ; 16 bits of zero in A, N
+  STX SCRATCH+5     ; tested later for exit from outer loop
+  DEX               ; bias applied to X
   DEX
 UST_OUTLP
-  LDY #8     ;count for inner loop
-  LSR 3,X    ;think "2,x" then later "3,X"
+  LDY #8            ; count for inner loop
+  LSR 3,X           ; think "2,x" then later "3,X"
 UST_INLP
   BCC UST_NOADD
   STA SCRATCH+2    ;Save time, don't CLC. Value in N+2,N+3 is reduced by 1 to allow this
@@ -5292,15 +5278,15 @@ UST_INLP
 UST_NOADD
   ROR
   ROR SCRATCH+1
-  ROR 3,X    ;think "2,x" then later "3,X"
+  ROR 3,X           ; think "2,x" then later "3,X"
   DEY
-  BNE UST_INLP  ;go back for 1 more shift?
+  BNE UST_INLP      ; go back for 1 more shift?
   INX
   CPX SCRATCH+5
-  BNE UST_OUTLP ;go back for 8 more shifts?
-  STA 4,X       ;ms byte of hi-word of result
+  BNE UST_OUTLP     ; go back for 8 more shifts?
+  STA 4,X           ; ms byte of hi-word of result
   LDA SCRATCH+1
-  STA 3,X       ;ls byte of hi-word of result
+  STA 3,X           ; ls byte of hi-word of result
 UST_EXIT
   RTS
 UST_Z
@@ -5312,6 +5298,7 @@ UST_Z
 dosmdivrem
   jsr smdivmodsub
   jmp next
+
 
 smdivmodsub
 .(
@@ -6188,8 +6175,8 @@ nomatch
   inc stackaccess+1
 done
 .)
-  jsr push16
-  jsr readsign      ; read a signed number
+  jsr push16        ; put string address on the stack
+  jsr readsign      ; attempt to read a signed number
   bcs nointerpret   ; carry signals failure to read a number
 
 
@@ -6203,10 +6190,9 @@ done
   ;; word as a literal. that means adding the code for DOLIT
   ;; and then the number.
   jsr pop16
-  ldy #0
+  ldy #1
   lda #<dolitcode
-  sta (DP),y
-  iny
+  sta (DP)
   lda #>dolitcode
   sta (DP),y
   iny
@@ -6506,17 +6492,17 @@ abortnest
   sta PRINTVEC
   lda #>nestingmsg
   sta PRINTVEC+1
+abortpr
   jsr printvecstr
   jmp abort
 
-;;; ABORT with a message about nesting
+;;; ABORT with a message about compiling
 abortcompile
   lda #<compileerr
   sta PRINTVEC
   lda #>compileerr
   sta PRINTVEC+1
-  jsr printvecstr
-  jmp abort
+  jmp abortpr
   
 ;;; ABORT with a message about an undefined word
 abortnotdef
@@ -6524,8 +6510,7 @@ abortnotdef
   sta PRINTVEC
   lda #>notdefinedmsg
   sta PRINTVEC+1
-  jsr printvecstr
-  jmp abort
+  jmp abortpr
 
 
 ;;; LIST prints a disk block to the screen
@@ -8070,8 +8055,56 @@ continue
   sta USE+1
   jsr zerobuffers
 
+  ;; cache the name of the file we are using
+.(
+  ldy #0
+copyloop
+  lda (SCRATCH+6),y
+  sta USENAME,y
+  iny
+  cpy #11
+  bne copyloop
+.)
+
   jmp next
 
+
+;;; USING? prints the name of the file we're USING.
+;;; do the work.
+dousingq
+.(
+  lda USEBASE+3
+  bne endusingq
+  lda #32
+  jsr puta
+  lda #<USENAME
+  sta stackaccess
+  lda #>USENAME
+  sta stackaccess+1
+  ldy #0
+nameloop
+  lda (stackaccess),y
+  cmp #32
+  beq donename
+  jsr puta
+  iny
+  cpy #8
+  bne nameloop
+donename
+  lda #".
+  jsr puta
+  ldy #8
+extloop
+  lda (stackaccess),y
+  cmp #32
+  beq endusingq
+  jsr puta
+  iny
+  cpy #11
+  bne extloop
+endusingq
+  jmp next
+.)
 
 ;; NOTE this uses SCRATCH+4,5,10,11,12,13,14,15. getblock uses 8,9.
 ;; match uses +6 and +7.
@@ -9325,10 +9358,9 @@ continue
   jmp next
 
 beginedit
-  lda #$00      ; initialize rowbase
-  sta rowbase
-  lda #$60
-  sta rowbase+1
+;  stz rowbase   ; set rowbase to 0
+;  lda #$60
+;  sta rowbase+1
 
   ;; reset variables and screen for startup
   lda TEXTBASE
@@ -9945,7 +9977,7 @@ clearloop
   jmp editloop
 
 midline
-  ;; still to be implemented
+  ;; BUG still to be implemented
   jmp editloop
 .)
 
@@ -10133,8 +10165,7 @@ endedit
   jsr nulltospace
   lda #$12
   sta row
-  lda #$00
-  sta col
+  stz col
   jsr moveto
   rts
 
