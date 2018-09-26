@@ -35,6 +35,17 @@ v05 has recursion, double-length arithmetic, and signed arithmetic.
 v06 is mainly focused on clean-up, efficiencies, bug fixes, and
 migrating internal operations towards usual Forth models.
 
+v07 added support for SD cards and the FAT16 filesystem, plus the block
+system and screen editor.
+
+v08 finally implemented create/does>, cleaned up lots of rough edges,
+improved performance, and worked on both the compiler and interpreter
+mechanisms to bring them more into line with standard FORTH practice.
+
+v09 is the current version, which has involved some more work on
+arithmetic routines, tightening the code to save space, and working
+towards a version that I can happily embed in a ROM.
+
 Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of
 the work of cleaning and clarifying that would be involved in
@@ -42,4 +53,6 @@ making it available for others to use.
 
 SECND was developed using the xa cross-assembler, so that's the
 syntax being used here.
+
+More information at https://www.dourish.com/projects/secnd.html.
 

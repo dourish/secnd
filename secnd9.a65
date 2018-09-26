@@ -130,6 +130,7 @@ COMPILE=%00000001   ; status flags
 SPI_CMD=64
 
 IMM=%00100000       ; flag for IMMEDIATE word (ie executed in compile mode)
+CPO=%01000000       ; flag for COMPILE-ONLY word (give error in interpreter)
 
 ;;; The flags below are left on the stack by the compiler to signal
 ;;; what sort of clean-up operation is needed at the end of a loop.
@@ -145,12 +146,15 @@ BUFFERSIZE=BLOCKSIZE+4
 BUFFERSPACE=BUFFERSIZE*6
 LIMIT=FIRST+BUFFERSPACE
 
+;;; DECL.A65 has declarations for the VIA and ACIA registers
+#include "../mitemon/decl.a65"
+
+
   jmp coldstart     ; jump past code defined in stack routines
 
-#include "../mitemon/decl.a65"
+
+;;; STACK.A65 has definitions for basic stack operations
 #include "../mitemon/stack.a65"
-
-
 
 
 ;;;
@@ -235,7 +239,7 @@ d7code
   .word donotequal
 
 d8entry
-  .byte %00100110   ; IMM + code for 6  ;; BUG? no need for immediate
+  .byte IMM+6       ; IMM + code for 6  ;; BUG? no need for immediate
   .byte "branch"
 d8link
   .word d7entry
@@ -487,7 +491,7 @@ d38code
   .word dorcopy
 
 d39entry
-  .byte %00100010   ; IMM flag plus count of two
+  .byte IMM+2
   .byte $2e, $22    ; dot, quote (.")
 d39link
   .word d38entry
@@ -496,7 +500,8 @@ d39code
   .word dodotqu
 
 d40entry
-  .byte %00100010   ; IMM flag plus count of two
+;  .byte %00100010   ; IMM flag plus count of two
+  .byte CPO+IMM+2
   .byte "if"
 d40link
   .word d39entry
@@ -504,7 +509,8 @@ d40code
   .word doif
 
 d41entry
-  .byte %00100100   ; IMM flag plus count of four
+;  .byte %00100100   ; IMM flag plus count of four
+  .byte CPO+IMM+4
   .byte "then"
 d41link
   .word d40entry
@@ -512,7 +518,8 @@ d41code
   .word dothen
 
 d42entry
-  .byte %00100101   ; IMM flag plus count of five
+;  .byte %00100101   ; IMM flag plus count of five
+  .byte CPO+IMM+5
   .byte "begin"
 d42link
   .word d41entry
@@ -520,7 +527,8 @@ d42code
   .word dobegin
 
 d43entry
-  .byte %00100101   ; IMM flag plus count of five
+;  .byte %00100101   ; IMM flag plus count of five
+  .byte CPO+IMM+5
   .byte "until"
 d43link
   .word d42entry
@@ -528,7 +536,8 @@ d43code
   .word dountil  
 
 d44entry
-  .byte %00100100   ; IMM plus count of four
+;  .byte %00100100   ; IMM plus count of four
+  .byte CPO+IMM+4
   .byte "else"
 d44link
   .word d43entry
@@ -544,7 +553,8 @@ d45code
   .word dowords
 
 d46entry
-  .byte %00100010   ; IMM plus count of two
+;  .byte %00100010   ; IMM plus count of two
+  .byte CPO+IMM+2
   .byte "do"
 d46link
   .word d45entry
@@ -561,7 +571,8 @@ d47code
   .word doparendo
 
 d48entry
-  .byte %00100100   ; IMM plus count of four
+;  .byte %00100100   ; IMM plus count of four
+  .byte CPO+IMM+4
   .byte "loop"
 d48link
   .word d47entry
@@ -578,7 +589,8 @@ d49code
   .word doparenloop
 
 d50entry
-  .byte %00100101   ; IMM plus count of five
+;  .byte %00100101   ; IMM plus count of five
+  .byte CPO+IMM+5
   .byte "+loop"
 d50link
   .word d49entry
@@ -700,7 +712,8 @@ d64code
   .word do2minus
 
 d65entry
-  .byte %00100101   ; IMM plus count of 5
+;  .byte %00100101   ; IMM plus count of 5
+  .byte IMM+5
   .byte "leave"
 d65link
   .word d64entry
@@ -725,7 +738,8 @@ d67code
   .word doinvert
 
 d68entry
-  .byte %00100101   ; IMM plus count of five
+;  .byte %00100101   ; IMM plus count of five
+  .byte IMM+5
   .byte "while"
 d68link
   .word d67entry
@@ -733,7 +747,8 @@ d68code
   .word dowhile
 
 d69entry
-  .byte %00100110   ; IMM plus count of six
+;  .byte %00100110   ; IMM plus count of six
+  .byte CPO+IMM+6
   .byte "repeat"
 d69link
   .word d68entry
@@ -741,7 +756,8 @@ d69code
   .word dorepeat
 
 d70entry
-  .byte %00100111   ; IMM plus count of seven
+;  .byte %00100111   ; IMM plus count of seven
+  .byte CPO+IMM+7
   .byte "recurse"
 d70link
   .word d69entry
@@ -749,7 +765,8 @@ d70code
   .word dorecurse
 
 d71entry
-  .byte %00100001   ; IMM plus count of one
+;  .byte %00100001   ; IMM plus count of one
+  .byte IMM+1
   .byte $5c         ; backslash
 d71link
   .word d70entry
@@ -765,7 +782,8 @@ d72code
   .word doconstant
 
 d73entry
-  .byte %00100010   ; IMM flag plus count of two
+;  .byte %00100010   ; IMM flag plus count of two
+  .byte IMM+2
   .byte $73, $22    ; "s", quote (.")
 d73link
   .word d72entry
@@ -958,7 +976,8 @@ d96code
   .word dodots
 
 d97entry
-  .byte %00100001   ; IMM plus count of 1
+;  .byte %00100001   ; IMM plus count of 1
+  .byte IMM+1
   .byte "("
 d97link
   .word d96entry
@@ -982,7 +1001,8 @@ d99code
   .word doforget
 
 d100entry
-  .byte %00100001   ; IMMEDIATE
+;  .byte %00100001   ; IMMEDIATE
+  .byte IMM+1
   .byte $27         ; tick
 d100link
   .word d99entry
@@ -1581,7 +1601,7 @@ d171code
   .word dochar
 
 d172entry
-  .byte %00100110    ; IMM plus count of six
+  .byte IMM+6
   .byte "[char]"
 d172link
   .word d171entry
@@ -1589,7 +1609,7 @@ d172code
   .word dobrchar
 
 d173entry
-  .byte %00100101    ; IMM plus count of five
+  .byte CPO+IMM+5
   .byte "does>"
 d173link
   .word d172entry
@@ -2930,14 +2950,9 @@ nocompile
   ldy #0
 .(
 next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   lda PAD,y
   beq done
   jsr puta
-;  sta ACIA_DATA
   iny
   bra next_char
 done
@@ -2950,14 +2965,6 @@ nointerp
   ;; from a compiled word. So IP points to a counted string. Print
   ;; it, and increment the instruction pointer appropriately.
 
-;.(
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
-;  lda #$20          ; print a space to begin
-;  sta ACIA_DATA
-;.)
   lda #$20
   jsr puta
 
@@ -2969,12 +2976,7 @@ nointerp
   ;; now print X characters 
 .(
 next_char
-;wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   lda (IP),y
-;  sta ACIA_DATA
   jsr puta
   iny
   dex
@@ -3101,7 +3103,7 @@ skipmsb
 .)
 
   ;; update count
-  sec               ; BUG this will stop working if PAD crosses word boundary
+  sec               ; BUG this will stop working if PAD crosses page boundary
   lda PADPTR
   sbc #<PAD
   dec               ; subtract one (don't count the count byte itself)
@@ -3291,9 +3293,9 @@ dobranch
 ;;;
 doif
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   lda #<zerobracode
   sta (DP)
@@ -3328,8 +3330,8 @@ continue
   ;; bump DP by two again (to move to next instruction space)
   jmp incDPby2
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 
@@ -3339,9 +3341,9 @@ nocompile
 ;;;
 dothen
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   ;; pop the flag from the stack and make sure it's an IFELSEFLAG
   jsr pop16
@@ -3373,8 +3375,8 @@ thenproceed
   sta (stackaccess),y
   bra done
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 
 done
   jmp next          ; done. proceed to next instruction.
@@ -3388,9 +3390,9 @@ done
 ;;;
 doelse
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   ;; First, pop the flag off the stack and ensure it's the IFELSEFLAG.
   jsr pop16
@@ -3473,8 +3475,8 @@ continue
 
   jmp next
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 ;;; dobegin is compiler behavior for BEGIN. It simply pushes the current
@@ -3482,9 +3484,9 @@ nocompile
 ;;; to calculate the offset.
 dobegin
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   ;; add the current instruction location to the stack
   lda DP
@@ -3499,7 +3501,7 @@ dobegin
   stz stackaccess+1
   jsr push16
 
-nocompile
+;nocompile
   jmp next
 .)
 
@@ -3508,9 +3510,9 @@ nocompile
 ;;; dobegin.
 dountil
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   ;; pop the flag off the stack to make sure it's a BEGINFLAG
   jsr pop16
@@ -3571,8 +3573,8 @@ skipmsb
 ;  jmp next
   jmp incDPby2
 
-nocompile
-  jmp next
+;nocompile
+;  jmp next
 .)
 
 
@@ -3580,10 +3582,10 @@ nocompile
 ;;; doparendo). It compiles in (do) and then pushes the next instruction
 ;;; address (the loop target) onto the stack along with a flag.
 dodo
-  ;; test if we're compiling
-  lda STATUS
-  bit #COMPILE
-  beq nocompiledo
+;  ;; test if we're compiling
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompiledo
 
   ;; compile (do)
   lda #<parendocode
@@ -3621,8 +3623,8 @@ skipmsb
 
   jmp next          ; done!
 
-nocompiledo
-  jmp abortcompile
+;nocompiledo
+;  jmp abortcompile
 
 ;;; doqdo is the compile-time code for ?DO, much of which is shared with
 ;;; do above.
@@ -3672,9 +3674,9 @@ doparendo
 ;;; doloop is the compiler behavior for LOOP. It compiles (LOOP) and a
 ;;; branch address to the address left on the stack.
 doloop
-  lda STATUS
-  bit #COMPILE
-  beq nodocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nodocompile
 
   lda #<parenloopcode
   sta (DP)
@@ -3769,18 +3771,18 @@ skipmsb
   jmp next
 ;  jmp incDPby2
 
-nodocompile
-  jmp abortcompile
+;nodocompile
+;  jmp abortcompile
 
 
 ;;; doplusloop implements the compiler behavior for +LOOP. Basically,
-;;; it writes in a differnt code address but then jumps into the LOOP
-;;; code to do all the calculations of offsets, etc.
+;;; it compiles in a different run-timecode address but then jumps
+;;; into the LOOP code to do all the calculations of offsets, etc.
 doplusloop
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   lda #<parplusloopcode
   sta (DP)
@@ -3791,8 +3793,8 @@ doplusloop
 
   jmp next
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 ;;; doparplusloop implements (+LOOP), the runtime code for +LOOP.
@@ -4345,9 +4347,9 @@ continue
 ;;; WHILE calls and branch back to the last BEGIN
 dorepeat
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   lda #<branchcode
   sta (DP)
@@ -4442,8 +4444,8 @@ skipmsb
 ;  jmp next
   jmp incDPby2
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 
@@ -4452,9 +4454,9 @@ nocompile
 ;;; being defined).
 dorecurse
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   clc
   lda CWORD         ; put word address into SCRATCH
@@ -4494,8 +4496,8 @@ continue
 ;  jmp next          ; we're done
   jmp incDPby2
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 ;;; backslash -- ignore the rest of the line
@@ -5841,9 +5843,9 @@ skip
 ;;; the code that was compiled after "DOES>".
 dodoes
 .(
-  lda STATUS
-  bit #COMPILE
-  beq nocompile
+;  lda STATUS
+;  bit #COMPILE
+;  beq nocompile
 
   ldy #0
   lda #<dodoesrtcode  ; first, compile in the code address
@@ -5872,8 +5874,8 @@ dodoes
 skip
   jmp next
 
-nocompile
-  jmp abortcompile
+;nocompile
+;  jmp abortcompile
 .)
 
 
@@ -6139,6 +6141,16 @@ skipmsb
   jmp interploop
 
 nocompile
+  ;; we are interpreting. if it's a compile-only word, check that
+  ;; the compiler is on.
+  lda SCRATCH
+  bit #CPO
+  beq interp
+  lda STATUS
+  bit #COMPILE
+  beq compileonly
+
+interp
   lda DPTR          ; add to address and store in dummy word entry
   sta dummyparam
   lda DPTR+1
@@ -6154,6 +6166,8 @@ execdummy
   ;; jump to NEXT to start running it
   jmp next
 
+compileonly
+  jmp abortcompile
 
   ;; we didn't find a match in the dictionary, so see if we can parse
   ;; it as a number.
