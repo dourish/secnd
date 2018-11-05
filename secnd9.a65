@@ -1769,6 +1769,8 @@ coldstart
   lda #$6c          ; indirect jump instruction
   sta XT-1          ; to make NEXT work
 
+  stz STATUS        ; make sure compiler is off
+
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing downwards, until I have a better idea; I should probably
   ;; combine with some other area because a whole page is much
@@ -2149,8 +2151,9 @@ done
 
 dorshift
 .(
-  jsr pop16         ; max is 32 by standard, so need just one byte
-  ldy stackaccess
+  ldy stackbase+1,x ; max is 32 by standard, so need only one byte
+  inx
+  inx
 loop
   lsr stackbase+2,x ; going right, so start with MSB
   ror stackbase+1,x
@@ -2161,8 +2164,9 @@ loop
 
 dolshift
 .(
-  jsr pop16         ; max is 32 by standard, so need just one byte
-  ldy stackaccess
+  ldy stackbase+1,x ; max is 32 by standard, so need just one byte
+  inx
+  inx
 loop
   asl stackbase+1,x ; going left, so start with LSB
   rol stackbase+2,x
@@ -2658,15 +2662,14 @@ dohere
 ;;; bytes available to whatever is at the top of the dictionary. It's
 ;;; used to allocate array space to variables.
 doallot
-  jsr pop16
   clc
   lda DP
-  adc stackaccess
+  adc stackbase+1,x
   sta DP
   lda DP+1
-  adc stackaccess+1
+  adc stackbase+2,x
   sta DP+1
-  jmp next
+  jmp drop1cell
 
 
 ;;; Leave the system after printing a termination message. This
@@ -3154,9 +3157,10 @@ continue
 ;;; dotype implements TYPE. Reads a count and a string address from the
 ;;; stack and prints the number of characters indicated in the count.
 dotype
-  jsr pop16
-  lda stackaccess
-  sta SCRATCH       ; put count in SCRATCH
+  lda stackbase+1,x
+  sta SCRATCH       ; put count in SCRATCH (only one byte)
+  inx
+  inx
   jsr pop16         ; fetch the string address
   lda SCRATCH
   beq endtype       ; stop now if the count was 0

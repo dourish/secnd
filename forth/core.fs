@@ -23,6 +23,20 @@
 32770 constant ddrb
 32771 constant ddra
 
+1024 constant b/buf
+1024 constant b/scr
+
 : >body 2+ ;
+: buffer: create allot ;     \ is this one right?
+: copy swap block swap buffer b/buf cmove update ;
+: cell+ 2+ ;
+: char+ 1+ ;
+: chars ;
+: align ;
+: d>s swap drop ;
+: 0< 0 < ;
+: 0> 0 > ;
+
+
 
 
