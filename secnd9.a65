@@ -1658,7 +1658,6 @@ d178link
 d178code
   .word dostardivmod
 
-dtop
 d179entry
   .byte 6
   .byte "using?"
@@ -1666,6 +1665,24 @@ d179link
   .word d178entry
 d179code
   .word dousingq
+
+d180entry
+  .byte IMM+6
+  .byte "abort", $22 ; abort"
+d180link
+  .word d179entry
+d180code
+  .word doabortq
+
+dtop
+d181entry
+  .byte 8
+  .byte "(abort", $22, $29 ; (abort")
+d181link
+  .word d180entry
+doabortqcode
+d181code
+  .word doabortqrt
 
 
 ;d101entry
@@ -3006,6 +3023,16 @@ continue
   jmp next          ; continue to the next instruction
 
 
+;;; This is the compiler behavior for ABORT". It compiles doabortqrt
+;;; and then jumps to the shared compile-string operation
+doabortq
+  ldy #1
+  lda #<doabortqcode
+  sta (DP)
+  lda #>doabortqcode
+  sta (DP),y
+  bra compilestr
+
 ;;; This is the compiler behavior for S"; it compiles dostrlit
 ;;; and an inline string constant. (do-s-quote)
 dosquote
@@ -3015,6 +3042,8 @@ dosquote
   lda #>sliteralcode
   sta (DP),y
 
+  ;; the string compilation is shared with abort"
+compilestr
   ;; then update DP by 2, to account for that word
 .(
   clc
@@ -6495,6 +6524,33 @@ endofline
 .)
 
 
+;;; Run-time behavior for ABORT". Print the string, then jump to abort.
+doabortqrt
+  lda #$20
+  jsr puta
+
+  phx               ; save X, since we're about to use it
+  lda (IP)          ; load the string length
+  tax               ; transfer to X. X counts down as Y counts up
+  ldy #1
+
+  ;; now print X characters 
+.(
+next_char
+  lda (IP),y
+  jsr puta
+  iny
+  dex
+  bne next_char
+done
+.)
+
+  plx               ; restore X
+
+  ;; normally, we would update the IP here, but we're going to reset
+  ;; it when we do the warm start anyway (BUG IS THIS RIGHT?)
+  bra abort         ; could just fall throught but this is safer
+
 ;;; Implements ABORT. On error, resets and returns to interpreter.
 ;;; BUG doesn't reset DP if we were in the process of compiling, so
 ;;; leave a mess in the user space.
@@ -6502,7 +6558,6 @@ endofline
 abort
   jsr crlf          ; print newline
   jmp warmstart     ; reset variables and return to interpreter loop
-
 
 ;;; ABORT with a message about nesting
 abortnest
