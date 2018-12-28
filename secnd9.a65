@@ -88,6 +88,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; IOSPACE is the boundary into I/O buffer space
 ;;; 
 ;;;
+USEBLKS=$000D       ; one byte only, block count of USING file
 BASE=$000E          ; and 000F (store two bytes but we only use lower)
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
@@ -6602,6 +6603,14 @@ abortnotdef
   sta PRINTVEC+1
   jmp abortpr
 
+;;; ABORT with a message about block count exceeded
+abortblocks
+  lda #<blockcountmsg
+  sta PRINTVEC
+  lda #>blockcountmsg
+  sta PRINTVEC+1
+  jmp abortpr
+
 
 ;;; LIST prints a disk block to the screen
 dolistword
@@ -8111,7 +8120,8 @@ continue
 .)
   ;; now, SCRATCH+6/7 points to directory entry
 
-  ;; first, grab the block number and push onto stack as a double
+  ;; first, grab the cluster number and push onto stack as a double.
+  ;; it is stored at bytes 26 and 27 of the directory entry.
   dex
   dex
   dex
@@ -8125,7 +8135,7 @@ continue
   stz stackbase+3,x
   stz stackbase+4,x
 
-  ;; turn block count on stack into sector count, and stash
+  ;; turn cluster count on stack into sector count, and stash
   ;; it for future reference
   jsr cltosector
   lda stackbase+1,x
@@ -8136,6 +8146,35 @@ continue
   sta USEBASE+2
   lda stackbase+4,x
   sta USEBASE+3
+
+  ;; now check file size to calculate largest block count. File size
+  ;; is at bytes 28-31 of the directory entry, but I need to divide by
+  ;; 1024, which means dropping the bottom byte altogether and shifting
+  ;; right by two.
+  ldy #29
+  lda (SCRATCH+6),y
+  sta stackbase+1,x
+  iny  
+  lda (SCRATCH+6),y
+  sta stackbase+2,x
+  iny  
+  lda (SCRATCH+6),y
+  sta stackbase+3,x
+  iny  
+  stz stackbase+4,x
+
+  lsr stackbase+3,x ; top byte is zero, so ignore it
+  ror stackbase+2,x
+  ror stackbase+1,x
+  lsr stackbase+3,x ; shift a second time
+  ror stackbase+2,x
+  ror stackbase+1,x
+
+  ;; a block count for any file up to 256k should fit in just one byte,
+  ;; so I'm going going to stash and test stackbase+1,x
+  lda stackbase+1,x
+  sta USEBLKS
+  
 
   ;; clean up the stack
   inx  
@@ -8749,6 +8788,14 @@ dobuffer
 ;;; available buffer. If the buffer it wants to use is already
 ;;; allocated, and is dirty, then write it out before returning.
 buffersub
+.(
+  ;; check that the requested buffer is within range
+  lda USEBLKS
+  cmp stackbase+1,x
+  bpl continue
+  jmp abortblocks
+continue
+.)
   dex               ; make two bytes of working space on the stack
   dex
 
@@ -11061,5 +11108,6 @@ diskerrormsg:    .byte " disk error", $00
 ;writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $00
+blockcountmsg:   .byte " exceeds file block count", $00
 bytesfree:       .byte " bytes free", $00
 hextable:	 .byte "0123456789ABCDEF"
