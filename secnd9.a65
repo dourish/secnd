@@ -117,8 +117,8 @@ PAD=$7E00           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
 
-XRECV=$C4DB         ; address of XMODEM subroutine from monitor
-DUMP=$C396          ; address of DUMP subroutine from monitor
+XRECV=$C65C         ; address of XMODEM subroutine from monitor
+DUMP=$C4F5          ; address of DUMP subroutine from monitor
 
 MBR=$0200           ; cache SD card master boot record in unused stack space
 MBR_NFATS=$0210     ; address of FAT count within cache
@@ -1674,7 +1674,6 @@ d180link
 d180code
   .word doabortq
 
-dtop
 d181entry
   .byte 8
   .byte "(abort", $22, $29 ; (abort")
@@ -1683,6 +1682,15 @@ d181link
 doabortqcode
 d181code
   .word doabortqrt
+
+dtop
+d182entry
+  .byte 6
+  .byte "latest"
+d182link
+  .word d181entry
+d183code
+  .word dolatest
 
 
 ;d101entry
@@ -6070,6 +6078,15 @@ dododoes
   jmp next
 
 
+;;; implements LATEST (leaves DT on the stack)
+dolatest
+  dex
+  dex
+  lda DT
+  sta stackbase+1,x
+  lda DT+1
+  sta stackbase+2,x
+  jmp next
 
 
 ;;;
@@ -7699,6 +7716,14 @@ finishsave
   inx
   inx
   inx  
+.(
+  ldy #255          ; added this loop to see if it prevents
+pauseloop           ; crashes on SAVE-BUFFERS that might be caused
+  nop               ; by power dips. BUG REMOVE THIS LATER.
+  nop
+  dey
+  bne pauseloop
+.)
   clc               ; all okay, clear error flag
   rts
 
@@ -9259,15 +9284,16 @@ abortsave
 .)
 
 doflush
-  dex
-  dex
 .(
   jsr savebufssub
 
+  dex
+  dex
   lda #<FIRST
   sta stackbase+1,x
   lda #>FIRST
   sta stackbase+2,x
+
 bufloop
   lda stackbase+1,x
   sta stackaccess
@@ -9285,9 +9311,10 @@ bufloop
   lda stackbase+2,x
   cmp #>FIRST
   bne bufloop
+
+  inx
+  inx
 .)
-  inx
-  inx
   jmp next
 
 
@@ -9321,7 +9348,7 @@ done
 ;;; efficient but it's designed to be agnostic as to the size of the
 ;;; buffers or their number -- which is kinda silly because I know
 ;;; both and they are unlikely to change... but hey, we only call this
-;;; once.
+;;; once (actually, twice...)
 zerobuffers
 .(
   lda #<FIRST
