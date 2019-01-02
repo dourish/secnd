@@ -55,6 +55,9 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; MEMORY MAP
 ;;;
 ;;; 0000 through 004F is reserved for the monitor (reusing SCRATCH)
+;;;  (It turns out, though, that it is mostly reuseable. Leaving
+;;;  SCRATCH, which is shared, $003x is needed for xmodem, but
+;;;  $000x, $002x, and $004x are all free for use here.)
 ;;; 0050 through 007F is available for variables (below)
 ;;; 0080 through 00FF is operand stack
 ;;; 0100 through 01FF is the hardware stack as usual
@@ -90,6 +93,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;;
 USEBLKS=$000D       ; one byte only, block count of USING file
 BASE=$000E          ; and 000F (store two bytes but we only use lower)
+IPTR=$0020          ; and 0021 (input pointer)
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
@@ -4544,8 +4548,28 @@ continue
 
 ;;; backslash -- ignore the rest of the line
 dobackslsh
-  stz TCNT          ; flush the input buffer
-  stz TPTR
+  ;; BUG FIX THIS LATER -- NO LONGER WORKS! MOST LIKELY WON'T WORK
+  ;; WITH STREAMING FILES WHERE \0 IS NOT NECESSARILY LINE-ALIGNED?
+.(
+  ldy #0
+nextchar
+  lda (IPTR),y
+  beq endofline
+  cmp #$0A
+  beq endofline
+  cmp #$0D
+  beq endofline
+  iny
+  bra nextchar
+endofline
+  clc
+  tya
+  adc IPTR
+  sta IPTR
+  bcc skip
+  inc IPTR+1
+skip
+.)
   jmp next
 
 
@@ -4778,6 +4802,7 @@ doupload
 ;;; BUG shouldn't flush input. can we preserve the current buffer
 ;;; location on the stack and restore it at the end of the load?
 docload
+  ;; BUG FIX THIS LATER NO LONGER WORKS
   jsr pop16         ; load address from the stack and set it
   lda stackaccess   ; as the memory region from which to read
   sta INBUFF        ; input text.
@@ -6115,8 +6140,13 @@ warmstart
   lda #$FF
   sta RP            ; reset return stack
   tax               ; reset user stack
-  stz TCNT          ; reset text buffer
-  stz TPTR
+;  stz TCNT          ; reset text buffer
+;  stz TPTR
+  stz INPUT
+  lda #<INPUT
+  sta IPTR
+  lda #>INPUT
+  sta IPTR+1
   stz SOURCE        ; return control to terminal
 
   ;; no jump... we call straight through to interploop below.
@@ -6371,86 +6401,126 @@ return
   rts
 
 
-;;; readnext
-;;; read the next word into the area at WORD, potentially refilling
-;;; the entire buffer in the process. this is a subroutine so that
-;;; I can also use it in several other places.
+;;; NEW NEW NEW NEW
+
+;; Read the next word in the current input stream, and leave it in
+;; WORD. Potentially refills the input. In the new model, IPTR
+;; always points to the next character to be read, from whichever
+;; input buffer we're using.
 readnext
-  ;; if no more input, ->nomoreinput
-
-  lda TPTR          ; current pointer
-  cmp TCNT          ; is that as much text as was read?
-  beq nomoreinput   ; if yes, print prompt and get more
-
-  tay               ; put TPTR into Y
-interpword
-  ;; begin loop
-
+  ldy #0
+lookforword
+  ;; skip over space to find a word
 .(
-  ;; look for next word
-  lda INPUT,y
-  cmp #$20          ; space
+  lda (IPTR),y
+  beq endofbuffer
+  cmp #$20          ; space?
   beq nextchar
-  cmp #$09          ; tab
+  cmp #$09          ; tab?
   beq nextchar
-  bne readword      ; not white space, so go and read a word
-
-  ;; continue skipping past space
+  cmp #$0A          ; newline?
+  beq nextchar
+  cmp #$0D          ; carriage return?
+  beq nextchar
+  bra startword
 nextchar
   iny
-  cpy TCNT
-  beq nomoreinput
-  bra interpword
+  bne lookforword
+  ;; Y has looped back to zero, so increment the high byte
+  ;; of the input pointer.
+  inc IPTR+1
+  bra lookforword
+endofbuffer
+  jmp refill
 .)
 
-  ;; no more input -- we have exhausted the text buffer. refill.
-nomoreinput
+
+startword
+.(
+  ;; first, update IPTR and reset Y
+  clc
+  tya
+  adc IPTR
+  sta IPTR
+  bcc skip
+  inc IPTR+1
+skip
+  ldy #0
+.)
+.(
+  stz WORD
+  phx
+  ldx #1
+nextchar
+  lda (IPTR),y
+  beq doneword
+  cmp #$20
+  beq doneword
+  cmp #$09
+  beq doneword
+  cmp #$0A
+  beq doneword
+  cmp #$0D
+  beq doneword
+  sta WORD,x
+  stx WORD          ; update character count
+  iny
+  beq doneword      ; max 255 characters
+  inx
+  bra nextchar
+doneword
+  clc               ; update IPTR past consumed input
+  tya
+  adc IPTR
+  sta IPTR
+  bcc skip
+  inc IPTR+1
+skip
+  plx               ; restore X
+  rts
+.)
+
+refill
 .(
   lda SOURCE        ; where are we reading from?
   beq terminal      ; terminal
-  jsr readbufline   ; buffer
+  ;; reading from buffer or stream?
+  ;; NO STREAM SUPPORT YET
+
+  ;; when we hit the end of a buffer, there is no more text to
+  ;; read, so we restore the old IPTR from the R-stack and continue
+  ;;
+  ;; BUG BUG BUG this presumes, if we're returning to another block,
+  ;; that the block is still loaded in the same part of memory as it
+  ;; was. that is not necessarily true. We might need to reload it.
+  inc RP
+  lda (RP)
+  sta IPTR
+  inc RP
+  lda (RP)
+  sta IPTR+1
+  inc RP
+  lda (RP)
+  sta SOURCE
+  inc RP            ; ignore upper byte
   bra finishedread
 terminal
   ;; are we compiling?
   lda STATUS
   beq usualprompt   ; not compiling so say "OK" as usual
   jsr cprompt       ; different prompt to say we're still compiling
-  bra refill
+  bra afterprompt
 usualprompt
   jsr okcrlf        ; signal completion
-refill
+afterprompt
   jsr readtermline  ; read another line of text
+  lda #<INPUT
+  sta IPTR
+  lda #>INPUT
+  sta IPTR+1
 finishedread
-  stz TPTR          ; reset the pointer
-  bra readnext      ; loop around
+  jmp readnext      ; loop around
 .)
-
-  ;; we have detected the start of a non-space sequence. read a word
-  ;; into a counted string at WORD.
-readword
-.(
-  stz WORD
-  phx
-  ldx #1            ; X starts at 1 because 0 is the count
-nextchar
-  lda INPUT,y
-  beq doneword      ; done if we hit NULL
-  cmp #$20
-  beq doneword      ; done if we hit space
-  cmp #$09
-  beq doneword      ; done if we hit tab
-  sta WORD,x        ; X starts at 1 because 0 is the count
-  stx WORD
-  iny
-  cpy TCNT          ; run off the end of the buffer?
-  beq doneword
-  inx
-  bra nextchar
-doneword
-  plx
-  sty TPTR          ; update the pointer (and free up Y)
-.)
-  rts
 
 
 
@@ -6501,45 +6571,6 @@ wait_rxd_full
   lda ACIA_DATA
   rts
 
-;;; Read a new line into the INPUT buffer, taking our input from
-;;; an area of memory. This is a bit of a hack, but allows other
-;;; code to process the input buffer with no knowledge of where
-;;; the text comes from. When the buffer is exhausted (signaled
-;;; by reading either a nul or the XMODEM buffer data, switch
-;;; back to terminal input.
-readbufline
-.(
-  ldy #0
-  stz TCNT
-readloop
-  lda (INBUFF),y
-  beq endofbuffer   ; null indicates end of the buffer
-  cmp #$1A          ; XMODEM padding character too
-  beq endofbuffer
-  cmp #$0A
-  beq endofline
-  cmp #$0D
-  beq endofline
-  sta INPUT,y
-  iny
-  bra readloop
-endofbuffer
-  stz SOURCE        ; set SOURCE back to 0 (ie, read from terminal)
-  ; continue to end of line
-endofline
-  lda #0
-  sta INPUT,y
-  sty TCNT
-  iny               ; move past the end of line character
-  tya               ; and update the buffer pointer
-  clc
-  adc INBUFF
-  sta INBUFF
-  lda INBUFF+1
-  adc #0
-  sta INBUFF+1
-  rts  
-.)
 
 
 ;;; Run-time behavior for ABORT". Print the string, then jump to abort.
@@ -6671,8 +6702,30 @@ doload
   jmp abortusing
 continue
 .)
+  ;; BUG should check that the block is scope
+  lda stackbase+1,x
+  phx               ; stash the block number for a moment
   jsr blocksub      ; find/load the block, leave address on stack
-  jmp docload       ; do regular character load with address
+  
+  dec RP            ; this is just here to keep RP word-aligned
+  lda SOURCE        ; store SOURCE on the stack
+  sta (RP)
+  dec RP
+  lda IPTR+1        ; save the current input pointer on the R-stack
+  sta (RP)
+  dec RP
+  lda IPTR
+  sta (RP)
+  dec RP
+  lda stackbase+1,x ; set input pointer to buffer address
+  sta IPTR
+  lda stackbase+2,x
+  sta IPTR+1
+  pla
+  sta SOURCE
+  inx               ; clean up the stack
+  inx
+  jmp next
 
 douse
   dex
@@ -11076,6 +11129,37 @@ endstr
 ;;; this is just here because the stack code needs it... should
 ;;; reoganize my files...
 putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
   rts
 
 
