@@ -73,14 +73,14 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 
 ;;; KEY SYSTEM VARIABLES
 ;;;
+;;; BASE is value of the current numeric base
+;;; IPTR is the input pointer (next character to be interpreted)
 ;;; IP is the instruction pointer
 ;;; DT (dictionary top) pointer to start (actually, end) of dictionary
 ;;; RP is return stack pointer
 ;;; XT holds execution token of currently executing word
 ;;; CODEVEC holds the location of the code for the next instruction
 ;;; DP holds pointer to the next available dictionary space
-;;; TPTR holds the offset of the most recently processed input character
-;;; TCNT holds the number of characters held in the buffer
 ;;; DPTR is an internal variable for traversing the dictionary
 ;;; STATUS is the system status flags (e.g. compilation flag)
 ;;; CWORD holds a pointer to the word currently being compiled
@@ -99,16 +99,16 @@ RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
 ; reserve 0056, 0057 (we need 0057 to store a JMP instruction)
 XT=$0058            ; and 0059
-TPTR=$005A
-TCNT=$005B
-DPTR=$005C          ; and 005D
-DP=$005E            ; and 005F (dictionary pointer)
-STATUS=$0060        ; status word
+;$005A is free
+;$005B is free
+DPTR=$005C          ; and 005D (used for searching the dictionary)
+DP=$005E            ; and 005F (dictionary pointer i.e. HERE)
+STATUS=$0060        ; status word (compiler flag)
 CWORD=$0061         ; and 0062 (word currently being compiled)
 PADPTR=$0063        ; and 0064 (pointer to text area)
-SOURCE=$0065
+SOURCE=$0065        ; current input location
 INBUFF=$0066        ; and 0067
-CURSEC=$0068        ; through $006B (current loaded sector)
+CURSEC=$0068        ; through $006B (caches sector stored at LBLOCK)
 USEBASE=$006C       ; through $006F (base sector address for block file)
 USE=$0070           ; and 0071
 PREV=$0072          ; and 0073
@@ -118,7 +118,8 @@ IOSPACE=$6000       ; start of buffer space
 FIRST=$63E0         ; start of space for blocks/disk buffers
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
-PAD=$7E00           ; PAD (string assembly area)
+IOSENTINAL=$7E00    ; and 7E01
+PAD=$7E02           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
 
@@ -4808,8 +4809,6 @@ docload
   sta INBUFF        ; input text.
   lda stackaccess+1
   sta INBUFF+1
-  stz TCNT          ; flush pending input
-  stz TPTR
   inc SOURCE        ; 0 is terminal, non-zero is memory
   jmp next
 
@@ -6140,14 +6139,14 @@ warmstart
   lda #$FF
   sta RP            ; reset return stack
   tax               ; reset user stack
-;  stz TCNT          ; reset text buffer
-;  stz TPTR
-  stz INPUT
-  lda #<INPUT
+  stz INPUT         ; initialize the terminal input buffer with zero
+  lda #<INPUT       ; set input pointer to the terminal input area
   sta IPTR
   lda #>INPUT
   sta IPTR+1
-  stz SOURCE        ; return control to terminal
+  stz SOURCE        ; take input from terminal
+  stz IOSENTINAL    ; place zeros at the end of the file I/O buffer
+  stz IOSENTINAL+1  ; to make sure we don't read off the end
 
   ;; no jump... we call straight through to interploop below.
 
@@ -6528,7 +6527,6 @@ finishedread
 ;;; terminal; readbufline will read from a buffer.
 readtermline
   ldy #0
-  stz TCNT          ; reset the counter
 readone
   jsr readchar
   cmp #$08           ; check for backspace
@@ -6557,7 +6555,6 @@ backspace
 doneline
   lda #0
   sta INPUT,y       ; add a null terminator
-  sty TCNT          ; update character count
   rts
 
 
@@ -6745,8 +6742,9 @@ dospat
   jmp next
 
 dosemics
+  ;; BUG NO LONGER WORKS
+  ;; SHOULD RESTORE SOURCE FROM R-STACK?
   stz SOURCE
-  stz TPTR
   jmp next
 
 ;doconvert
@@ -11129,37 +11127,6 @@ endstr
 ;;; this is just here because the stack code needs it... should
 ;;; reoganize my files...
 putax
-.(
-  phy
-
-  pha
-wait_txd_empty
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty
-  pla
-  pha             ; put a copy back
-  clc
-  and #$f0
-  ror
-  ror
-  ror
-  ror
-  tay
-  lda hextable,y
-  sta ACIA_DATA
-wait_txd_empty2
-  lda ACIA_STATUS
-  and #$10
-  beq wait_txd_empty2
-  pla
-  clc
-  and #$0f
-  tay
-  lda hextable,y
-  sta ACIA_DATA
-.)
-  ply
   rts
 
 
