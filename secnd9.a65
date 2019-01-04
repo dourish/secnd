@@ -42,7 +42,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$3600
+USERBASE=$3700
 #endif
 
 ;;;
@@ -58,6 +58,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;;  (It turns out, though, that it is mostly reuseable. Leaving
 ;;;  SCRATCH, which is shared, $003x is needed for xmodem, but
 ;;;  $000x, $002x, and $004x are all free for use here.)
+;;;  temporarily using $004x for file table data
 ;;; 0050 through 007F is available for variables (below)
 ;;; 0080 through 00FF is operand stack
 ;;; 0100 through 01FF is the hardware stack as usual
@@ -88,12 +89,14 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; INPUT points to the input buffer
 ;;; WORD points to the temporary string processing space
 ;;; INBUFF points to the current non-terminal input area
-;;; IOSPACE is the boundary into I/O buffer space
 ;;; 
 ;;;
 USEBLKS=$000D       ; one byte only, block count of USING file
 BASE=$000E          ; and 000F (store two bytes but we only use lower)
 IPTR=$0020          ; and 0021 (input pointer)
+NEXTSECTOR=$0040    ; through $0043 -- next sector to be read in stream
+FILESIZE=$0044      ; through $0047 -- size of file in stream
+READSIZE=$0048      ; through $004B -- how much data still to read
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
@@ -114,11 +117,10 @@ USE=$0070           ; and 0071
 PREV=$0072          ; and 0073
 USENAME=$0074       ; through 007F
 RBASE=$0200         ; base for R-stack
-IOSPACE=$6000       ; start of buffer space
 FIRST=$63E0         ; start of space for blocks/disk buffers
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
-IOSENTINAL=$7E00    ; and 7E01
+IOSENTINEL=$7E00    ; and 7E01
 PAD=$7E02           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
@@ -1129,20 +1131,20 @@ d114link
 d114code
   .word doupload
 
-d115entry
-  .byte 5
-  .byte "cload"
-d115link
-  .word d114entry
-d115code
-docloadcode
-  .word docload
+;d115entry
+;  .byte 5
+;  .byte "cload"
+;d115link
+;  .word d114entry
+;d115code
+;docloadcode
+;  .word docload
 
 d116entry
   .byte 4
   .byte "key?"
 d116link
-  .word d115entry
+  .word d114entry
 d116code
   .word dokeyqu
 
@@ -1293,28 +1295,22 @@ d132code
 ;d133code
 ;  .word doflookup
 
-d134entry
-  .byte 5
-  .byte "fload"
-d134link
-  .word d132entry
-d134code
-dofloadcode
-  .word dofload
+;d134entry
+;  .byte 5
+;  .byte "fload"
+;d134link
+;  .word d132entry
+;d134code
+;dofloadcode
+;  .word dofload
 
 d135entry
   .byte 7
   .byte "include"
 d135link
-  .word d134entry
+  .word d132entry
 d135code
-  .word dolist
-d135param
-  .word dofloadcode
-  .word dolitcode
-  .word IOSPACE
-  .word docloadcode
-  .word exitcode
+  .word doinclude
 
 ;d136entry
 ;  .byte 9
@@ -4798,6 +4794,96 @@ doupload
   jmp next
 
 
+;; switch input to a streaming file.
+doinclude
+  jsr readnext
+  jsr matchname
+.(
+  bcc continue
+  jmp abortnofile
+continue
+.)
+  ;; after matchname, SCRATCH+6/7 points to directory entry
+  ;; first, grab the cluster number and push onto stack as a double
+  dex
+  dex
+  dex
+  dex
+  ldy #26
+  lda (SCRATCH+6),y ; LSB
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH+6),y ; MSB
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; convert it to a sector number
+  jsr cltosector
+
+  ;; store this. eventually it'll be in a file table, but for now
+  ;; it'll be in a single cache.
+  lda stackbase+1,x
+  sta NEXTSECTOR
+  lda stackbase+2,x
+  sta NEXTSECTOR+1
+  lda stackbase+3,x
+  sta NEXTSECTOR+2
+  lda stackbase+4,x
+  sta NEXTSECTOR+3
+
+  ;; clean up the stack
+  inx
+  inx
+  inx
+  inx
+
+  ;; grab the file size and stash it both as a size and as the
+  ;; "still to read" value
+  ldy #28
+  lda (SCRATCH+6),y
+  sta FILESIZE
+  sta READSIZE
+  iny
+  lda (SCRATCH+6),y
+  sta FILESIZE+1
+  sta READSIZE+1
+  iny
+  lda (SCRATCH+6),y
+  sta FILESIZE+2
+  sta READSIZE+2
+  iny
+  lda (SCRATCH+6),y
+  sta FILESIZE+3
+  sta READSIZE+3
+
+  ;; save the current SOURCE and input pointer
+  dec RP            ; this is just here to keep RP word-aligned
+  lda SOURCE        ; store SOURCE on the stack
+  sta (RP)
+  dec RP
+  lda IPTR+1        ; save the current input pointer on the R-stack
+  sta (RP)
+  dec RP
+  lda IPTR
+  sta (RP)
+  dec RP
+
+  ;; now set the input pointer to the zero-filled sentinel values at
+  ;; the end of the stream buffer. we don't actually read any of the
+  ;; file here. let refill do the work (all in one place).
+  lda #<IOSENTINEL
+  sta IPTR
+  lda #>IOSENTINEL
+  sta IPTR+1
+
+  lda #$FF          ; bit 7 indicates stream. for now, one will do.
+  sta SOURCE
+
+  jmp next
+
+
+;;; THIS CODE DUE TO BE DELETED
 ;;; Temporarily switch input to region at location specified on
 ;;; the stack.
 ;;; BUG shouldn't flush input. can we preserve the current buffer
@@ -5840,10 +5926,10 @@ unusedsub
   dex
   dex
   sec
-  lda #<IOSPACE
+  lda #<FIRST
   sbc DP
   sta stackbase+1,x
-  lda #>IOSPACE
+  lda #>FIRST
   sbc DP+1
   sta stackbase+2,x
   rts
@@ -6145,8 +6231,8 @@ warmstart
   lda #>INPUT
   sta IPTR+1
   stz SOURCE        ; take input from terminal
-  stz IOSENTINAL    ; place zeros at the end of the file I/O buffer
-  stz IOSENTINAL+1  ; to make sure we don't read off the end
+  stz IOSENTINEL    ; place zeros at the end of the file I/O buffer
+  stz IOSENTINEL+1  ; to make sure we don't read off the end
 
   ;; no jump... we call straight through to interploop below.
 
@@ -6400,8 +6486,6 @@ return
   rts
 
 
-;;; NEW NEW NEW NEW
-
 ;; Read the next word in the current input stream, and leave it in
 ;; WORD. Potentially refills the input. In the new model, IPTR
 ;; always points to the next character to be read, from whichever
@@ -6430,9 +6514,9 @@ nextchar
   inc IPTR+1
   bra lookforword
 endofbuffer
-  jmp refill
+  jsr refill
+  jmp readnext 
 .)
-
 
 startword
 .(
@@ -6452,7 +6536,7 @@ skip
   ldx #1
 nextchar
   lda (IPTR),y
-  beq doneword
+  beq midword       ; got a null un the middle of a word
   cmp #$20
   beq doneword
   cmp #$09
@@ -6467,6 +6551,13 @@ nextchar
   beq doneword      ; max 255 characters
   inx
   bra nextchar
+midword
+  ;; we hit a null in the middle of a word -- need to refill
+  ;; but only if we are streaming?
+  lda SOURCE
+  bpl doneword
+  jsr refill
+  jmp  nextchar
 doneword
   clc               ; update IPTR past consumed input
   tya
@@ -6479,13 +6570,17 @@ skip
   rts
 .)
 
+;;; refills the input buffer, possibly switching buffers if we have
+;;; exhausted our current source.
 refill
 .(
   lda SOURCE        ; where are we reading from?
-  beq terminal      ; terminal
-  ;; reading from buffer or stream?
-  ;; NO STREAM SUPPORT YET
+  beq terminal      ; 0 = terminal
+  bpl buffer        ; 1-127 = buffer
+  bra refillstream  ; <0 = stream
 
+buffer
+reverttoterm
   ;; when we hit the end of a buffer, there is no more text to
   ;; read, so we restore the old IPTR from the R-stack and continue
   ;;
@@ -6513,13 +6608,115 @@ usualprompt
   jsr okcrlf        ; signal completion
 afterprompt
   jsr readtermline  ; read another line of text
-  lda #<INPUT
+  lda #<INPUT       ; set input pointer to the text input area
   sta IPTR
   lda #>INPUT
   sta IPTR+1
 finishedread
-  jmp readnext      ; loop around
+  rts
+
+;;; refill I/O buffer from stream
+refillstream
+  ;; is there more data to read?
+  lda READSIZE
+  ora READSIZE+1
+  ora READSIZE+2
+  ora READSIZE+3
+  bne moredata
+  jmp  endofstream
+
+moredata
+  ;; set up block to read
+  dex
+  dex
+  dex
+  dex
+  lda NEXTSECTOR
+  sta stackbase+1,x
+  lda NEXTSECTOR+1
+  sta stackbase+2,x
+  lda NEXTSECTOR+2
+  sta stackbase+3,x
+  lda NEXTSECTOR+3
+  sta stackbase+4,x
+
+  ;; read data
+  jsr sdloadblock
+  lda LBLOCK
+
+  ;; do I need to place a sentinel value in there? ie, were there fewer
+  ;; than 512 characters left to read?
+  lda READSIZE+3
+  bne skipsentinel
+  lda READSIZE+2
+  bne skipsentinel
+  lda READSIZE+1
+  cmp #1
+  bne skipsentinel
+needsentinel
+  lda #"%
+  jsr puta
+  clc               ; calculate offset for sentinel value
+  lda #<LBLOCK      ; IO buffer base address plus bytes remaining
+  adc READSIZE      ; plus one (the one is handled via Y, to save
+  sta SCRATCH       ; an extra addition).
+  lda #>LBLOCK
+  adc READSIZE+1
+  sta SCRATCH+1
+  ldy #1
+  lda #0
+  sta (SCRATCH),y
+skipsentinel
+
+  ;; update read data count. we read in units of 512 bytes, so bottom
+  ;; byte is untouched. decrement by 512 and if we've gone negative,
+  ;; reset to zero
+  sec
+  lda READSIZE
+  sbc #0
+  sta READSIZE
+  lda READSIZE+1
+  sbc #2
+  sta READSIZE+1
+  lda READSIZE+2
+  sbc #0
+  sta READSIZE+2
+  lda READSIZE+3
+  sbc #0
+  sta READSIZE+3
+  bpl skipzero
+  stz READSIZE
+  stz READSIZE+1
+  stz READSIZE+2
+  stz READSIZE+3
+skipzero
+
+  ;; update next block pointer
+  clc
+  lda NEXTSECTOR
+  adc #1
+  sta NEXTSECTOR
+  lda NEXTSECTOR+1
+  adc #0
+  sta NEXTSECTOR+1
+  lda NEXTSECTOR+2
+  adc #0
+  sta NEXTSECTOR+2
+  lda NEXTSECTOR+3
+  adc #0
+  sta NEXTSECTOR+3
+
+  ;; reset IPTR
+  lda #<LBLOCK
+  sta IPTR
+  lda #>LBLOCK
+  sta IPTR+1
+  rts
+
+endofstream
+  jmp reverttoterm
 .)
+
 
 
 
@@ -6701,7 +6898,7 @@ continue
 .)
   ;; BUG should check that the block is scope
   lda stackbase+1,x
-  phx               ; stash the block number for a moment
+  pha               ; stash the block number for a moment
   jsr blocksub      ; find/load the block, leave address on stack
   
   dec RP            ; this is just here to keep RP word-aligned
@@ -6718,7 +6915,7 @@ continue
   sta IPTR
   lda stackbase+2,x
   sta IPTR+1
-  pla
+  pla               ; restore the block number
   sta SOURCE
   inx               ; clean up the stack
   inx
@@ -8294,174 +8491,7 @@ endusingq
   jmp next
 .)
 
-;; NOTE this uses SCRATCH+4,5,10,11,12,13,14,15. getblock uses 8,9.
-;; match uses +6 and +7.
-dofload
 
-  jsr readnext      ; get next word and put it into input buffer
-  jsr matchname     ; see what we get
-
-.(
-  bcc continue
-  jmp abortnofile
-
-continue
-.)
-  ;; now, SCRATCH+6/7 points to directory entry
-
-  ;; first, grab the block number and push onto stack as a double
-  dex
-  dex
-  dex
-  dex
-  ldy #26
-  lda (SCRATCH+6),y ; LSB
-  sta stackbase+1,x
-  iny
-  lda (SCRATCH+6),y ; MSB
-  sta stackbase+2,x
-  stz stackbase+3,x
-  stz stackbase+4,x
-
-  ;; grab the file size and stash it
-  iny
-  lda (SCRATCH+6),y
-  sta SCRATCH+12
-  iny
-  lda (SCRATCH+6),y
-  sta SCRATCH+13
-  iny
-  lda (SCRATCH+6),y
-  sta SCRATCH+14
-  iny
-  lda (SCRATCH+6),y
-  sta SCRATCH+15
-
-  ;; set up destination address
-  lda #<IOSPACE
-  sta SCRATCH+10
-  lda #>IOSPACE
-  sta SCRATCH+11
-
-  jsr loadfile
-  jmp next
-
-
-;;; load a file from SD into memory. On entry, the starting block
-;;; is specified on the stack, the length of the file is in
-;;; SCRATCH+12-15, and the address in memory into whic it should be
-;;; copied is in SCRATCH+10-11. (There is no logic to these addresses;
-;;; it's just how the code was originally written before being extracted
-;;; as a subroutine. Return to this for a more logical format?)
-loadfile
-  ;; turn block count on stack into sector count, and load the sector
-  jsr cltosector
-  jsr sdloadblock
-
-  ;; now load what's in the block, up to the file size. we load in
-  ;; blocks of 256 bytes, but we do so twice because the buffer is
-  ;; actually 512 bytes.
-  ;; BUG we ignore anything over 32k for the file size
-
-loadblock
-.(
-  ;; by default, load 256 characters
-  ldy #255
-  sty SCRATCH
-  ;; are there fewer than 256 characters left to process?
-  lda SCRATCH+13
-  beq under256
-  dec SCRATCH+13    ; we will load 256 characters, take 256 off the count
-  bra lfirst256
-under256
-  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
-  beq endfload      ; if it's zero, we're done
-  dec               ; range from 0 rather than 1
-  sta SCRATCH
-  tay
-  stz SCRATCH+12
-.)
-
-lfirst256
-.(
-loop
-  lda LBLOCK,y
-  sta (SCRATCH+10),y
-  dey
-  bne loop
-  lda LBLOCK,y      ; and the last one by hand
-  sta (SCRATCH+10),y
-.)
-
-.(
-  clc
-  lda SCRATCH+10
-  adc SCRATCH
-  adc #1
-  sta SCRATCH+10
-  bcc done
-  inc SCRATCH+11
-done
-.)
-
-  
-  ;; now consider the second 256 characters in the sector
-.(
-  ;; are there fewer than 256 characters to process?
-  lda SCRATCH+13
-  beq under256
-  dec SCRATCH+13    ; update count for the end of the load
-  ldy #255          ; 256 characters to be copied
-  sty SCRATCH       ; y is the index but keep a copy
-  bra lsecond256
-under256
-  lda SCRATCH+12    ; < 256, so lowest byte is # of chars to print
-  beq endfload      ; if it's zero, we're done
-  dec               ; re-range to zero-index
-  sta SCRATCH
-  tay
-  stz SCRATCH+12    ; after which, there will be none left
-.)
-
-lsecond256
-.(
-loop
-  lda HBLOCK,y
-  sta (SCRATCH+10),y
-  dey
-  bne loop
-  lda HBLOCK,y      ; last one by hand
-  sta (SCRATCH+10),y
-.)
-
-.(
-  clc
-  lda SCRATCH+10
-  adc SCRATCH
-  adc #1
-  sta SCRATCH+10
-  bcc done
-  inc SCRATCH+11
-done
-.)
-
-  ;; if there is more data, load the next block and repeat
-  lda SCRATCH+13
-  bne loadnextblock
-  lda SCRATCH+12
-  beq endfload
-
-loadnextblock
-  jsr sdloadnext
-  jmp loadblock
-
-endfload
-  ; null-terminate the load
-  lda #0
-  sta (SCRATCH+10)
-  rts
-
-  
 
 ;; convert a cluster address into a sector address
 ;; calculation is cluster-2 * sectors/cluster + resv + len FATs + len root
