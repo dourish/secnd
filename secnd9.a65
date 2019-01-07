@@ -4795,25 +4795,52 @@ doupload
 
 
 ;; switch input to a streaming file.
+;; REWRITTEN TO USE NEW LOOKUPDIR
 doinclude
-  jsr readnext
-  jsr matchname
+  jsr readnext      ; get name of file into WORD
+  jsr lookupdir     ; look it up in the root directory
 .(
   bcc continue
   jmp abortnofile
 continue
 .)
-  ;; after matchname, SCRATCH+6/7 points to directory entry
-  ;; first, grab the cluster number and push onto stack as a double
-  dex
-  dex
-  dex
-  dex
+  ;; grab pointer to the data
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ;; remove pointer from the stack
+  inx
+  inx
+
+  ;; grab the file size and stash it both as a size and as the
+  ;; "still to read" value
+  ldy #28
+  lda (SCRATCH),y
+  sta FILESIZE
+  sta READSIZE
+  iny
+  lda (SCRATCH),y
+  sta FILESIZE+1
+  sta READSIZE+1
+  iny
+  lda (SCRATCH),y
+  sta FILESIZE+2
+  sta READSIZE+2
+  iny
+  lda (SCRATCH),y
+  sta FILESIZE+3
+  sta READSIZE+3
+
+  ;; next, grab the file cluster number and push onto stack as a double.
+  ;; we put this on top of the directory cluster number that's there
+  ;; because we don't need it
   ldy #26
-  lda (SCRATCH+6),y ; LSB
+  lda (SCRATCH),y ; LSB
   sta stackbase+1,x
   iny
-  lda (SCRATCH+6),y ; MSB
+  lda (SCRATCH),y ; MSB
   sta stackbase+2,x
   stz stackbase+3,x
   stz stackbase+4,x
@@ -4837,25 +4864,6 @@ continue
   inx
   inx
   inx
-
-  ;; grab the file size and stash it both as a size and as the
-  ;; "still to read" value
-  ldy #28
-  lda (SCRATCH+6),y
-  sta FILESIZE
-  sta READSIZE
-  iny
-  lda (SCRATCH+6),y
-  sta FILESIZE+1
-  sta READSIZE+1
-  iny
-  lda (SCRATCH+6),y
-  sta FILESIZE+2
-  sta READSIZE+2
-  iny
-  lda (SCRATCH+6),y
-  sta FILESIZE+3
-  sta READSIZE+3
 
   ;; save the current SOURCE and input pointer
   dec RP            ; this is just here to keep RP word-aligned
@@ -6653,8 +6661,6 @@ moredata
   cmp #1
   bne skipsentinel
 needsentinel
-  lda #"%
-  jsr puta
   clc               ; calculate offset for sentinel value
   lda #<LBLOCK      ; IO buffer base address plus bytes remaining
   adc READSIZE      ; plus one (the one is handled via Y, to save
