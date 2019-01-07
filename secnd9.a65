@@ -1287,13 +1287,13 @@ d132link
 d132code
   .word doshow
 
-;d133entry
-;  .byte 7
-;  .byte "flookup"
-;d133link
-;  .word d132entry
-;d133code
-;  .word doflookup
+d133entry
+  .byte 7
+  .byte "flookup"
+d133link
+  .word d132entry
+d133code
+  .word doflookup
 
 ;d134entry
 ;  .byte 5
@@ -1308,7 +1308,7 @@ d135entry
   .byte 7
   .byte "include"
 d135link
-  .word d132entry
+  .word d133entry
 d135code
   .word doinclude
 
@@ -8371,9 +8371,10 @@ endshow
 
 ;;; USING specifies the block file from which subsequent block
 ;;; operations should load and save.
+;;; REWRITTEN FOR NEW LOOKUPDIR
 dousing
   jsr readnext      ; get next word and put it into input buffer
-  jsr matchname     ; see what we get
+  jsr lookupdir     ; search the root directory
 
 .(
   bcc continue
@@ -8381,47 +8382,28 @@ dousing
 
 continue
 .)
-  ;; now, SCRATCH+6/7 points to directory entry
-
-  ;; first, grab the cluster number and push onto stack as a double.
-  ;; it is stored at bytes 26 and 27 of the directory entry.
-  dex
-  dex
-  dex
-  dex
-  ldy #26
-  lda (SCRATCH+6),y ; LSB
-  sta stackbase+1,x
-  iny
-  lda (SCRATCH+6),y ; MSB
-  sta stackbase+2,x
-  stz stackbase+3,x
-  stz stackbase+4,x
-
-  ;; turn cluster count on stack into sector count, and stash
-  ;; it for future reference
-  jsr cltosector
+  ;; copy the directory pointer into SCRATCH
   lda stackbase+1,x
-  sta USEBASE
+  sta SCRATCH
   lda stackbase+2,x
-  sta USEBASE+1
-  lda stackbase+3,x
-  sta USEBASE+2
-  lda stackbase+4,x
-  sta USEBASE+3
+  sta SCRATCH+1
+
+  ;; drop it from the stack
+  inx
+  inx
 
   ;; now check file size to calculate largest block count. File size
   ;; is at bytes 28-31 of the directory entry, but I need to divide by
   ;; 1024, which means dropping the bottom byte altogether and shifting
   ;; right by two.
   ldy #29
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta stackbase+1,x
   iny  
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta stackbase+2,x
   iny  
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta stackbase+3,x
   iny  
   stz stackbase+4,x
@@ -8437,7 +8419,31 @@ continue
   ;; so I'm going going to stash and test stackbase+1,x
   lda stackbase+1,x
   sta USEBLKS
-  
+
+  ;; next, grab the file cluster number and push onto stack as a double.
+  ;; it is stored at bytes 26 and 27 of the directory entry. we just
+  ;; write it over the directory cluster number that's on the stack
+  ;; because we don't need that.
+  ldy #26
+  lda (SCRATCH),y   ; LSB
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH),y   ; MSB
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; turn cluster count on stack into sector count, and stash
+  ;; it for future reference
+  jsr cltosector
+  lda stackbase+1,x
+  sta USEBASE
+  lda stackbase+2,x
+  sta USEBASE+1
+  lda stackbase+3,x
+  sta USEBASE+2
+  lda stackbase+4,x
+  sta USEBASE+3
 
   ;; clean up the stack
   inx  
@@ -8580,155 +8586,17 @@ done
   rts
 
 
-;doflookup
-;  jsr readnext      ; get next word and put it into input buffer
-;  jsr matchname     ; see what we get
-;  lda SCRATCH+6
-;  sta stackaccess
-;  lda SCRATCH+7
-;  sta stackaccess+1
-;  jsr push16
-;  jsr print16u
-;  jmp next
-
-
-;; BUG BUG OLD OLD BEING REPLACED BY LOOKUPDIR
-;; take filename in WORD, look up in root directory, return pointer
-;; to directory entry that matches in SCRATCH+6/7. Return entry is 0x0000
-;; and carry is set in case of no match.
-matchname
+doflookup
+  jsr readnext      ; get next word and put it into input buffer
+  jsr lookupdir     ; look it up
 .(
-  ;; load the root directory
-  jsr sdloadroot
-
-  ;; reset PADPTR
-  lda #<PAD
-  sta PADPTR
-  lda #>PAD
-  sta PADPTR+1
-
-  ;; first, make a canonical version of the filename, padding
-  ;; both name and extension with spaces to full 8.3 versions.
-  ;; keep this on the PAD.
-  ;; 
-  ;; start by filling with default characters
-.(
-  ldy #10
-  lda #$20
-loop
-  sta (PADPTR),y
-  dey
-  bne loop
+  bcc continue      ; found the file?
+  jmp abortnofile
+continue
 .)
-
-  ;; now, copy filename into the canoniclized version, switching
-  ;; lower case to upper case along the way
-.(
-  lda WORD          ; null-terminate the string, just in case
-  tay
-  iny
-  lda #0
-  sta WORD,y
-
-  ldy #1            ; skip the first byte (char count)
-  lda PADPTR
-  sta SCRATCH
-  lda PADPTR+1
-  sta SCRATCH+1
-loop
-  lda WORD,y
-  cmp #"."
-  beq endname
-  cmp #"a"
-  bcc copy
-  cmp #"{"          ; first character after "z"
-  bcs copy
-  and #%11011111    ; convert lower to upper
-copy  
-  sta (SCRATCH)
-  inc SCRATCH
-  iny
-  cpy #9
-  beq endname
-  bra loop
-endname
-  iny               ; skip "."
-  clc
-  lda PADPTR
-  adc #8
-  sta SCRATCH       ; BUG ignores upper byte, presumes no page boundary
-.)
-
-  ;; finally, copy the extension.
-.(
-extloop
-  lda WORD,y
-  beq done
-  cmp #"a"
-  bcc copy
-  cmp #"{"          ; first character after "z"
-  bcs copy
-  and #%11011111    ; convert lower to upper
-copy  
-  sta (SCRATCH)
-  inc SCRATCH
-  iny
-  cpy #3
-  bne extloop
-done
-.)
-  ;; now the filename is in the same format as stored in the
-  ;; directory, making matching easier.
-  lda #<LBLOCK
-  sta SCRATCH+6
-  lda #>LBLOCK
-  sta SCRATCH+7
-
-matchloop
-  lda (SCRATCH+6)   ; null entry (ie, end of directory)?
-  beq noentry
-
-  ;; match a single directory entry
-matchentry
-  ldy #0
-nameloop
-  lda (SCRATCH+6),y
-  cmp (PADPTR),y
-  bne matchfail
-  iny
-  cpy #11
-  bne nameloop
-success
-  clc
-  rts
-
-matchfail
-  ;; get next directory entry
-  clc
-  lda SCRATCH+6     ; bump pointer
-  adc #32           ; entries are 32 bytes long
-  sta SCRATCH+6
-  lda SCRATCH+7
-  adc #0
-  sta SCRATCH+7
-  cmp #>PAD         ; run off the end of the buffer?
-  bne matchloop
-  jsr sdloadnext    ; load next block
-  lda #<LBLOCK      ; reset the directory pointer to new block
-  sta SCRATCH+6
-  lda #>LBLOCK
-  sta SCRATCH+7
-  bra matchloop     ; loop to test this one
-.)
-
-noentry
-  stz SCRATCH+6
-  stz SCRATCH+7
-  sec
-  rts
+  jmp next
 
 
-;;; NEW code
 ;; take filename in WORD, look up in root directory. On success,
 ;; the relevant directory sector is left in the LBLOCK/HBLOCK area,
 ;; and the stack contains both the double-precision sector number
