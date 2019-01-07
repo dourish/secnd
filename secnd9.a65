@@ -34,7 +34,7 @@
 ;;;      elements available to Forth, performance improvements
 ;;; v07  SD card integration, block/buffer implementation, editor
 ;;; v08  string routines, cleanup, interpreter work, create/does>
-;;; v09  ROMmable version
+;;; v09  ROMmable version, reconfigured text input, expanded FAT16 code
 ;;;
 
 #ifdef ROM
@@ -1497,20 +1497,20 @@ d158link
 d158code
   .word dosavebufs
 
-d159entry
-  .byte 4
-  .byte "base"
-d159link
-  .word d158entry
-d159code
-  .word doloadconst
-  .word USERBASE
+;d159entry
+;  .byte 4
+;  .byte "base"
+;d159link
+;  .word d158entry
+;d159code
+;  .word doloadconst
+;  .word USERBASE
 
 d160entry
   .byte 3
   .byte "ud."
 d160link
-  .word d159entry
+  .word d158entry
 d160code
   .word doprint32u
 
@@ -6576,9 +6576,8 @@ refill
 .(
   lda SOURCE        ; where are we reading from?
   beq terminal      ; 0 = terminal
-  bpl buffer        ; 1-127 = buffer
-  bra refillstream  ; <0 = stream
-
+  bmi refillstream  ; bit 7 = stream
+  ;; otherwise, it's a buffer, so fall through...
 buffer
 reverttoterm
   ;; when we hit the end of a buffer, there is no more text to
@@ -6901,8 +6900,10 @@ continue
   pha               ; stash the block number for a moment
   jsr blocksub      ; find/load the block, leave address on stack
   
-  dec RP            ; this is just here to keep RP word-aligned
-  lda SOURCE        ; store SOURCE on the stack
+  lda #0            ; we ignore this top byte but it keeps RP word-aligned
+  sta (RP)          ; and storing 0 helps with debugging
+  dec RP
+  lda SOURCE        ; store SOURCE on the R-stack
   sta (RP)
   dec RP
   lda IPTR+1        ; save the current input pointer on the R-stack
@@ -8215,46 +8216,54 @@ endofdir
 
 
 ;; NOTE this uses SCRATCH+4,5,12,13,14,15
+;; REWRITTEN TO USE NEW LOOKUPDIR
 doshow
 
   jsr readnext      ; get next word and put it into input buffer
-  jsr matchname     ; see what we get
+  jsr lookupdir     ; look up in the directory
 
 .(
-  bcc continue
+  bcc continue      ; file name found?
   jmp abortnofile
 
 continue
 .)
-  ;; now, SCRATCH+6/7 points to directory entry
+  ;; grab the pointer to the data
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
 
-  ;; first, grab the block number and push onto stack as a double
-  dex
-  dex
-  dex
-  dex
+  ;; remove pointer from the stack
+  inx
+  inx
+
+  ;; first, grab the cluster number for the file and push onto
+  ;; stack (overwriting directory sector number) as a double
   ldy #26
-  lda (SCRATCH+6),y ; LSB
+  lda (SCRATCH),y ; LSB
   sta stackbase+1,x
   iny
-  lda (SCRATCH+6),y ; MSB
+  lda (SCRATCH),y ; MSB
   sta stackbase+2,x
   stz stackbase+3,x
   stz stackbase+4,x
 
   ;; grab the file size and stash it
   iny
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta SCRATCH+12
   iny
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta SCRATCH+13
   iny
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta SCRATCH+14
   iny
-  lda (SCRATCH+6),y
+  lda (SCRATCH),y
   sta SCRATCH+15
+
+  ;; don't need to hold onto SCRATCH any more, it's safe to reuse
 
   ;; turn block count on stack into sector count, and load the sector
   jsr cltosector
@@ -8577,6 +8586,7 @@ done
 ;  jmp next
 
 
+;; BUG BUG OLD OLD BEING REPLACED BY LOOKUPDIR
 ;; take filename in WORD, look up in root directory, return pointer
 ;; to directory entry that matches in SCRATCH+6/7. Return entry is 0x0000
 ;; and carry is set in case of no match.
@@ -8706,6 +8716,162 @@ matchfail
 .)
 
 noentry
+  stz SCRATCH+6
+  stz SCRATCH+7
+  sec
+  rts
+
+
+;;; NEW code
+;; take filename in WORD, look up in root directory. On success,
+;; the relevant directory sector is left in the LBLOCK/HBLOCK area,
+;; and the stack contains both the double-precision sector number
+;; and a pointer to the matching entry within it. On failure,
+;; stack is unchanged and carry flag is set.
+lookupdir
+.(
+  ;; load the root directory
+  jsr sdloadroot
+
+  ;; reset PADPTR
+  lda #<PAD
+  sta PADPTR
+  lda #>PAD
+  sta PADPTR+1
+
+  ;; first, make a canonical version of the filename, padding
+  ;; both name and extension with spaces to full 8.3 versions.
+  ;; keep this on the PAD.
+  ;; 
+  ;; start by filling with default characters
+.(
+  ldy #10
+  lda #$20
+loop
+  sta (PADPTR),y
+  dey
+  bne loop
+.)
+
+  ;; now, copy filename into the canoniclized version, switching
+  ;; lower case to upper case along the way
+.(
+  lda WORD          ; null-terminate the string, just in case
+  tay
+  iny
+  lda #0
+  sta WORD,y
+
+  ldy #1            ; skip the first byte (char count)
+  lda PADPTR
+  sta SCRATCH
+  lda PADPTR+1
+  sta SCRATCH+1
+loop
+  lda WORD,y
+  cmp #"."
+  beq endname
+  cmp #"a"
+  bcc copy
+  cmp #"{"          ; first character after "z"
+  bcs copy
+  and #%11011111    ; convert lower to upper
+copy  
+  sta (SCRATCH)
+  inc SCRATCH
+  iny
+  cpy #9
+  beq endname
+  bra loop
+endname
+  iny               ; skip "."
+  clc
+  lda PADPTR
+  adc #8
+  sta SCRATCH       ; BUG ignores upper byte, presumes no page boundary
+.)
+
+  ;; finally, copy the extension.
+.(
+extloop
+  lda WORD,y
+  beq done
+  cmp #"a"
+  bcc copy
+  cmp #"{"          ; first character after "z"
+  bcs copy
+  and #%11011111    ; convert lower to upper
+copy  
+  sta (SCRATCH)
+  inc SCRATCH
+  iny
+  cpy #3
+  bne extloop
+done
+.)
+  ;; now the filename is in the same format as stored in the
+  ;; directory, making matching easier.
+  lda #<LBLOCK
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+
+matchloop
+  lda (SCRATCH+6)   ; null entry (ie, end of directory)?
+  beq nodirentry
+
+  ;; match a single directory entry
+matchentry
+  ldy #0
+nameloop
+  lda (SCRATCH+6),y
+  cmp (PADPTR),y
+  bne matchfail
+  iny
+  cpy #11
+  bne nameloop
+success
+  dex
+  dex
+  dex
+  dex
+  dex
+  dex
+  lda SCRATCH+6
+  sta stackbase+1,x
+  lda SCRATCH+7
+  sta stackbase+2,x
+  lda CURSEC
+  sta stackbase+3,x
+  lda CURSEC+1
+  sta stackbase+4,x
+  lda CURSEC+2
+  sta stackbase+5,x
+  lda CURSEC+3
+  sta stackbase+6,x
+  clc
+  rts
+
+matchfail
+  ;; get next directory entry
+  clc
+  lda SCRATCH+6     ; bump pointer
+  adc #32           ; entries are 32 bytes long
+  sta SCRATCH+6
+  lda SCRATCH+7
+  adc #0
+  sta SCRATCH+7
+  cmp #>PAD         ; run off the end of the buffer?
+  bne matchloop
+  jsr sdloadnext    ; load next block
+  lda #<LBLOCK      ; reset the directory pointer to new block
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+  bra matchloop     ; loop to test this one
+.)
+
+nodirentry
   stz SCRATCH+6
   stz SCRATCH+7
   sec
@@ -11180,7 +11346,7 @@ compileerr:      .byte "  compile-only word encountered", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
 inityesmsg:      .byte " initialized", $0d, $0a, $00
 initnosmsg:      .byte " initialization failed", $0d, $0a, $00
-timeoutmsg:      .byte " timeout", $0d, $0a, $00
+;timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $00
 initializedmsg:  .byte " initialized ", $00
 usingerrormsg:   .byte " not USING block file", $00
