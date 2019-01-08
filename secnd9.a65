@@ -8553,8 +8553,8 @@ dofatset
   jmp next
 
 ;;; stack is a value and a FAT number; saves the value at the
-;;; right point in the FAT.
-;;; BUG BUG BUG NEED TO DO THIS TWICE, ONCE FOR EACH FAT COPY
+;;; right point in the FAT. There are two copies of the FAT, so
+;;; write both of them.
 fatsetsub
   jsr cltofat       ; get FAT block and offset
   lda stackbase+2,x ; put offset out of the way
@@ -8577,6 +8577,7 @@ fatsetsub
   sta (SCRATCH)     ; store at location pointed to by SCRATCH
   lda stackaccess+1
   sta (SCRATCH),y
+
   dex               ; make space for a double on the stack
   dex
   dex
@@ -8584,6 +8585,21 @@ fatsetsub
   lda CURSEC        ; write in current disk block number
   sta stackbase+1,x ; cached at load time
   lda CURSEC+1
+  sta stackbase+2,x
+  lda CURSEC+2
+  sta stackbase+3,x
+  lda CURSEC+3
+  sta stackbase+4,x
+  jsr sdsaveblock   ; write back the block
+
+  dex               ; do it again for the second copy of the FAT
+  dex               ; make space for a double on the stack
+  dex
+  dex
+  lda CURSEC        ; write in current disk block number
+  sta stackbase+1,x ; cached at load time
+  lda CURSEC+1
+  inc               ; second block is at first+256. there will be no carry.
   sta stackbase+2,x
   lda CURSEC+2
   sta stackbase+3,x
