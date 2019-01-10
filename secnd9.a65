@@ -42,7 +42,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$3700
+USERBASE=$4000
 #endif
 
 ;;;
@@ -1197,21 +1197,21 @@ d124link
 d124code
   .word dofreefat
 
-;d125entry
-;  .byte 5
-;  .byte "cmd55"
-;d125link
-;  .word d124entry
-;d125code
-;  .word docmd55
-;
-;d126entry
-;  .byte 4
-;  .byte "cmd0"
-;d126link
-;  .word d125entry
-;d126code
-;  .word docmd0
+d125entry
+  .byte 7
+  .byte "freedir"
+d125link
+  .word d124entry
+d125code
+  .word dofreedir
+
+d126entry
+  .byte 6
+  .byte "mkfile"
+d126link
+  .word d125entry
+d126code
+  .word domkfile
 ;
 ;d127entry
 ;  .byte 5
@@ -1225,7 +1225,7 @@ d128entry
   .byte 7
   .byte "cltofat"
 d128link
-  .word d124entry
+  .word d126entry
 d128code
   .word docltofat
 
@@ -4784,7 +4784,6 @@ doupload
 
 
 ;; switch input to a streaming file.
-;; REWRITTEN TO USE NEW LOOKUPDIR
 doinclude
   jsr readnext      ; get name of file into WORD
   jsr lookupdir     ; look it up in the root directory
@@ -7870,14 +7869,59 @@ finishsave
   inx
   inx
   inx  
+
+  lda #"w
+  jsr puta
+
 .(
   ldy #255          ; added this loop to see if it prevents
 pauseloop           ; crashes on SAVE-BUFFERS that might be caused
   nop               ; by power dips. BUG REMOVE THIS LATER.
   nop
+  nop
+  nop
   dey
   bne pauseloop
 .)
+  lda #"x
+  jsr puta
+.(
+  ldy #255          ; added this loop to see if it prevents
+pauseloop           ; crashes on SAVE-BUFFERS that might be caused
+  nop               ; by power dips. BUG REMOVE THIS LATER.
+  nop
+  nop
+  nop
+  dey
+  bne pauseloop
+.)
+  lda #"y
+  jsr puta
+.(
+  ldy #255          ; added this loop to see if it prevents
+pauseloop           ; crashes on SAVE-BUFFERS that might be caused
+  nop               ; by power dips. BUG REMOVE THIS LATER.
+  nop
+  nop
+  nop
+  dey
+  bne pauseloop
+.)
+  lda #"z
+  jsr puta
+.(
+  ldy #255          ; added this loop to see if it prevents
+pauseloop           ; crashes on SAVE-BUFFERS that might be caused
+  nop               ; by power dips. BUG REMOVE THIS LATER.
+  nop
+  nop
+  nop
+  dey
+  bne pauseloop
+.)
+  lda #"Z
+  jsr puta
+
   clc               ; all okay, clear error flag
   rts
 
@@ -8262,7 +8306,6 @@ endshow
 
 ;;; USING specifies the block file from which subsequent block
 ;;; operations should load and save.
-;;; REWRITTEN FOR NEW LOOKUPDIR
 dousing
   jsr readnext      ; get next word and put it into input buffer
   jsr lookupdir     ; search the root directory
@@ -8480,15 +8523,14 @@ done
 ;;; take a cluster address on the stack and return the sector number
 ;;; of the relevant FAT block, and the offset within it.
 cltofat
-  ;; we are going from four bytes on the stack to six, so
+  ;; we are going from two bytes on the stack to six, so
   ;; reserve space
   dex
   dex
   dex
   dex
 
-  ;; cluster now at stacbkbase+5/6
-
+  ;; cluster number (C) is now at stacbkbase+5/6
   ;; the offset is C mod 256 * 2.
   lda stackbase+5,x
   sta stackbase+1,x
@@ -8496,7 +8538,7 @@ cltofat
   asl stackbase+1,x
   rol stackbase+2,x
 
-  ;; the block is C div 256 + 1, so just shift by one full byte and
+  ;; the sector is C div 256 + 1, so just shift by one full byte and
   ;; add one
   clc
   lda stackbase+6,x
@@ -8552,11 +8594,11 @@ dofatset
   jsr fatsetsub
   jmp next
 
-;;; stack is a value and a FAT number; saves the value at the
+;;; stack is a value and a cluster number; saves the value at the
 ;;; right point in the FAT. There are two copies of the FAT, so
 ;;; write both of them.
 fatsetsub
-  jsr cltofat       ; get FAT block and offset
+  jsr cltofat       ; get FAT cluster and offset
   lda stackbase+2,x ; put offset out of the way
   pha
   lda stackbase+1,x
@@ -8606,8 +8648,11 @@ fatsetsub
   lda CURSEC+3
   sta stackbase+4,x
   jsr sdsaveblock   ; write back the block
+  lda #"!
+  jsr puta
   rts
 
+;; BUG BUG TESTING ONLY
 doflookup
   jsr readnext      ; get next word and put it into input buffer
   jsr lookupdir     ; look it up
@@ -8622,14 +8667,16 @@ dofreefat
   jsr findfreecluster
   jmp next
 
+
 ;;; find first free cluster on the disk by searching the FAT
 findfreecluster
 .(
+
   ;; SCRATCH+2...6 is a block pointer, counting sectors that make
   ;; up the FAT. SCRATCH and SCRATCH+1 point to entires inside the
   ;; loaded FAT.
 
-  ;; set up the block pointer for the start of the FAT
+  ;; set up the sector pointer for the start of the FAT
   lda #1
   sta SCRATCH+2
   stz SCRATCH+3
@@ -8637,7 +8684,7 @@ findfreecluster
   stz SCRATCH+5
 
 searchnextblock
-  ;; load a sector of the FAT
+  ;; load a sector of the FAT. Put sector number on the stack and load.
   dex
   dex
   dex
@@ -8650,6 +8697,7 @@ searchnextblock
   sta stackbase+3,x
   lda SCRATCH+5
   sta stackbase+4,x
+  jsr sdloadblock
 
   ;; set up the offset pointer
   lda #<LBLOCK
@@ -8709,12 +8757,13 @@ skip
   dex
   stz stackbase+1,x
   stz stackbase+2,x
+  sec
   bra endfind
 
 free
-  ;; found a free entry. calculate the cluster number. Take the block
-  ;; number, subtract one, multiply by 256 and add the block pointer
-  ;; minus LBLOCK.
+  ;; found a free entry. calculate the cluster number. Take the sector
+  ;; number, subtract one, multiply by 256 and add the block pointer,
+  ;; minus LBLOCK, divided by two
 
   sec
   lda SCRATCH+2
@@ -8732,12 +8781,14 @@ free
   stz SCRATCH+2
 
   sec
-  lda SCRATCH
+  lda SCRATCH       ; subtract lBLOCK
   sbc #<LBLOCK
   sta SCRATCH+2
   lda SCRATCH+1
   sbc #>LBLOCK
   sta SCRATCH+1
+  lsr SCRATCH+2     ; divide by two
+  ror SCRATCH+1
 
   clc
   lda SCRATCH+1
@@ -8751,13 +8802,11 @@ free
   sta stackbase+1,x
   lda SCRATCH+3
   sta stackbase+2,x
+  clc
 endfind
   rts
 .)
 
-
-  
-  
 
 ;; take filename in WORD, look up in root directory. On success,
 ;; the relevant directory sector is left in the LBLOCK/HBLOCK area,
@@ -8766,20 +8815,174 @@ endfind
 ;; stack is unchanged and carry flag is set.
 lookupdir
 .(
-  ;; load the root directory
-  jsr sdloadroot
+  jsr mkcanon       ; transform filename into canonical form
 
+  jsr sdloadroot    ; load the root directory
+
+  lda #<LBLOCK      ; set up pointer into directory data
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+
+  ;; loop until end of directory block or match
+matchloop
+  lda (SCRATCH+6)   ; null entry (ie, end of directory)?
+  beq endofdirectory
+
+  ;; test a single directory entry
+matchentry
+  ldy #0
+nameloop
+  lda (SCRATCH+6),y
+  cmp (PADPTR),y
+  bne matchfail
+  iny
+  cpy #11
+  bne nameloop
+success
+  dex               ; we found a match, so return this pointer
+  dex               ; and the block in which it was found
+  dex
+  dex
+  dex
+  dex
+  lda SCRATCH+6
+  sta stackbase+1,x
+  lda SCRATCH+7
+  sta stackbase+2,x
+  lda CURSEC
+  sta stackbase+3,x
+  lda CURSEC+1
+  sta stackbase+4,x
+  lda CURSEC+2
+  sta stackbase+5,x
+  lda CURSEC+3
+  sta stackbase+6,x
+  clc               ; clear carry to signal success
+  rts
+
+matchfail
+  ;; this name doesn't match so get next directory entry
+  clc
+  lda SCRATCH+6     ; bump pointer
+  adc #32           ; entries are 32 bytes long
+  sta SCRATCH+6
+  lda SCRATCH+7
+  adc #0
+  sta SCRATCH+7
+  cmp #>PAD         ; run off the end of the buffer?
+  bne matchloop
+  jsr sdloadnext    ; load next block
+  lda #<LBLOCK      ; reset the directory pointer to new block
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+  bra matchloop     ; loop to test this one
+
+;; hit the end of directory without a match. return 0.
+endofdirectory
+  stz SCRATCH+6
+  stz SCRATCH+7
+  sec               ; set carry to signal failure
+  rts
+.)
+
+
+;;; TMP TESTING ONLY
+dofreedir
+  jsr findfreedir
+  jmp next
+
+;;; find a free directory entry. returns cluster and offset.
+findfreedir
+.(
+  jsr sdloadroot    ; load the root directory
+
+searchonesector
+  lda #<LBLOCK      ; set up pointer into directory data
+  sta SCRATCH+6
+  lda #>LBLOCK
+  sta SCRATCH+7
+
+  ;; loop until end of directory block or match
+matchloop
+  ;; need to test for end of directory, which is basically when
+  ;; we have just loaded beyond the actual directory.
+  ;; directory begins at block 513, and is 16 sectors long, so
+  ;; 529 is end. Use 17 in the low byte as sentinel
+  lda CURSEC
+  cmp #11
+  beq endofdirectory
+
+  ;; test a single directory entry
+matchentry
+  ;; entry is empty if first byte is either zero or $E5
+  lda (SCRATCH+6)
+  beq success       ; 0 means slot is free
+  cmp #$E5          ; $E5 also means slot is free
+  bne matchfail
+success
+  dex               ; we found a match, so return this pointer
+  dex               ; and the block in which it was found
+  dex
+  dex
+  dex
+  dex
+  sec
+  lda SCRATCH+6
+  sbc #<LBLOCK
+  sta stackbase+1,x
+  lda SCRATCH+7
+  sbc #>LBLOCK
+  sta stackbase+2,x
+  lda CURSEC
+  sta stackbase+3,x
+  lda CURSEC+1
+  sta stackbase+4,x
+  lda CURSEC+2
+  sta stackbase+5,x
+  lda CURSEC+3
+  sta stackbase+6,x
+  clc               ; clear carry to signal success
+  rts
+
+matchfail
+  ;; this slot is full, so move on
+  clc
+  lda SCRATCH+6     ; bump pointer
+  adc #32           ; entries are 32 bytes long
+  sta SCRATCH+6
+  lda SCRATCH+7
+  adc #0
+  sta SCRATCH+7
+  cmp #>PAD         ; run off the end of the buffer?
+  bne matchloop
+  jsr sdloadnext    ; load next block
+  lda #"+
+  jsr puta
+  bra searchonesector
+
+;; hit the end of directory without a match. return 0.
+endofdirectory
+  stz SCRATCH+6
+  stz SCRATCH+7
+  sec               ; set carry to signal failure
+  rts
+.)
+
+
+;;; Filenames are stored in directories in FAT16 in a canonical format:
+;;; all caps, with the base name padded to eight characters using spaces,
+;;; and the extension padded to three. Make name in WORD into a canonical
+;;; form stored on PAD.
+mkcanon
   ;; reset PADPTR
   lda #<PAD
   sta PADPTR
   lda #>PAD
   sta PADPTR+1
 
-  ;; first, make a canonical version of the filename, padding
-  ;; both name and extension with spaces to full 8.3 versions.
-  ;; keep this on the PAD.
-  ;; 
-  ;; start by filling with default characters
+  ;; start by filling destination with default characters
 .(
   ldy #10
   lda #$20
@@ -8789,7 +8992,7 @@ loop
   bne loop
 .)
 
-  ;; now, copy filename into the canoniclized version, switching
+  ;; now, copy filename into the canonicalized version, switching
   ;; lower case to upper case along the way
 .(
   lda WORD          ; null-terminate the string, just in case
@@ -8814,7 +9017,7 @@ loop
   and #%11011111    ; convert lower to upper
 copy  
   sta (SCRATCH)
-  inc SCRATCH
+  inc SCRATCH       ; BUG depends on PAD not crossing page boundary
   iny
   cpy #9
   beq endname
@@ -8845,74 +9048,184 @@ copy
   bne extloop
 done
 .)
-  ;; now the filename is in the same format as stored in the
-  ;; directory, making matching easier.
-  lda #<LBLOCK
-  sta SCRATCH+6
-  lda #>LBLOCK
-  sta SCRATCH+7
+  rts
 
-matchloop
-  lda (SCRATCH+6)   ; null entry (ie, end of directory)?
-  beq nodirentry
+;;; BUG TMP TESTING
+domkfile
+  jsr mkfile
+  lda #"$
+  jsr puta
+  jsr crlf
+  jmp next
 
-  ;; match a single directory entry
-matchentry
+;;; create a new file
+mkfile
+  ;; get name
+  jsr readnext
+
+  ;; canonicalize name, leave result in PAD
+  jsr mkcanon
+
+  jsr crlf
+  lda #"0
+  jsr puta
+  jsr printstacksub
+  jsr crlf
+  ;; find available cluster. returns cluster number.
+  jsr findfreecluster
+  lda #"a
+  jsr puta
+  jsr printstacksub
+  jsr crlf
+
+  ;; cache cluster #
+  lda stackbase+1,x
+  sta SCRATCH+14
+  lda stackbase+2,x
+  sta SCRATCH+15
+
+  ;; allocate cluster. set up the stack with the write value ($ffff)
+  ;; and cluster number, then call routine to set it
+  lda #$ff
+  sta stackbase+1,x
+  sta stackbase+2,x
+  dex
+  dex
+  lda SCRATCH+14
+  sta stackbase+1,x
+  lda SCRATCH+15
+  sta stackbase+2,x
+  lda #"b
+  jsr puta
+  jsr printstacksub
+  jsr crlf
+  jsr fatsetsub
+  lda #"c
+  jsr puta
+  jsr printstacksub
+  jsr crlf
+
+  ;; find directory slot. returns sector and offset. sector is loaded.
+  lda #"d
+  jsr puta
+  jsr findfreedir
+.(
+  bcc continue
+  jmp abortmkfile
+continue
+.)
+  jsr printstacksub
+  jsr crlf
+
+  clc
+  lda stackbase+1,x
+  adc #<LBLOCK
+  sta SCRATCH+2
+  sta stackaccess
+  lda stackbase+2,x
+  adc #>LBLOCK
+  sta SCRATCH+3
+  sta stackaccess+1
+
+  lda #"e
+  jsr puta
+
+  jsr mkcanon       ; restore canonical version, oops
+  lda #"E
+  jsr puta
+
+  ;; NOTE stack is 6 bytes deep here after findfreedir
+
+  ;; set name
+.(
   ldy #0
-nameloop
-  lda (SCRATCH+6),y
-  cmp (PADPTR),y
-  bne matchfail
+nextchar
+  lda PAD,y
+  jsr puta
+  sta (SCRATCH+2),y
   iny
   cpy #11
-  bne nameloop
-success
-  dex
-  dex
-  dex
-  dex
-  dex
-  dex
-  lda SCRATCH+6
-  sta stackbase+1,x
-  lda SCRATCH+7
-  sta stackbase+2,x
-  lda CURSEC
-  sta stackbase+3,x
-  lda CURSEC+1
-  sta stackbase+4,x
-  lda CURSEC+2
-  sta stackbase+5,x
-  lda CURSEC+3
-  sta stackbase+6,x
-  clc
-  rts
-
-matchfail
-  ;; get next directory entry
-  clc
-  lda SCRATCH+6     ; bump pointer
-  adc #32           ; entries are 32 bytes long
-  sta SCRATCH+6
-  lda SCRATCH+7
-  adc #0
-  sta SCRATCH+7
-  cmp #>PAD         ; run off the end of the buffer?
-  bne matchloop
-  jsr sdloadnext    ; load next block
-  lda #<LBLOCK      ; reset the directory pointer to new block
-  sta SCRATCH+6
-  lda #>LBLOCK
-  sta SCRATCH+7
-  bra matchloop     ; loop to test this one
+  bne nextchar
 .)
+  jsr crlf
 
-nodirentry
-  stz SCRATCH+6
-  stz SCRATCH+7
-  sec
+  lda #"f
+  jsr puta
+
+  ;; set attributes
+  lda #0
+  ldy #$0B
+  sta (SCRATCH+2),y
+
+  lda #"g
+  jsr puta
+
+  ;; set dates
+  lda #0
+  ldy #$0D
+  sta (SCRATCH+2),y
+  iny  ; 0E
+  sta (SCRATCH+2),y
+  iny  ; 0F
+  sta (SCRATCH+2),y
+  iny  ; 10
+  sta (SCRATCH+2),y
+  iny  ; 11
+  sta (SCRATCH+2),y
+  iny  ; 12
+  sta (SCRATCH+2),y
+  iny  ; 13
+  sta (SCRATCH+2),y
+
+  lda #"h
+  jsr puta
+  ;; set cluster #
+  ldy #$1A
+  lda SCRATCH+14
+  sta (SCRATCH+2),y
+  iny
+  lda SCRATCH+15
+  sta (SCRATCH+2),y
+
+  lda #"i
+  jsr puta
+  ;; set size
+  ldy #$1C
+  lda #0
+  sta (SCRATCH+2),y
+  iny
+  lda #$80
+  sta (SCRATCH+2),y
+  iny
+  lda #0
+  sta (SCRATCH+2),y
+  iny
+  lda #0
+  sta (SCRATCH+2),y
+
+  lda #"j
+  jsr puta
+
+  ;; stack currently has directory block and offset for
+  ;; entry we've been filling. Drop offset and write
+  ;; directory block.
+  inx
+  inx
+  jsr sdsaveblock
+
+  lda #"z
+  jsr puta
+  jsr crlf
+
+  ;; return
   rts
 
+
+abortmkfile
+  ;; BUG BUG UNALLOCATE FAT AND ISSUE ERROR MESSAGE
+  lda #"!
+  jsr puta
+  rts
 
 
 
