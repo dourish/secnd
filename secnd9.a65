@@ -120,7 +120,7 @@ RBASE=$0200         ; base for R-stack
 FIRST=$63E0         ; start of space for blocks/disk buffers
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
-IOSENTINEL=$7E00    ; and 7E01
+IOSENTINEL=$7E00    ; and 7E01 MUST BE PAGE ALIGNED SEE DODIR
 PAD=$7E02           ; PAD (string assembly area)
 WORD=$7EC0          ; temporary space for parsing words (max 63 chars)
 INPUT=$7F00         ; input space
@@ -1115,20 +1115,19 @@ d114link
 d114code
   .word doupload
 
-;d115entry
-;  .byte 5
-;  .byte "cload"
-;d115link
-;  .word d114entry
-;d115code
-;docloadcode
-;  .word docload
+d115entry
+  .byte 6
+  .byte "delete"
+d115link
+  .word d114entry
+d115code
+  .word dodelete
 
 d116entry
   .byte 4
   .byte "key?"
 d116link
-  .word d114entry
+  .word d115entry
 d116code
   .word dokeyqu
 
@@ -1212,20 +1211,20 @@ d126link
   .word d125entry
 d126code
   .word domkfile
-;
-;d127entry
-;  .byte 5
-;  .byte "cmd58"
-;d127link
-;  .word d126entry
-;d127code
-;  .word docmd58
-;
+
+d127entry
+  .byte 6
+  .byte "rename"
+d127link
+  .word d126entry
+d127code
+  .word dorename
+
 d128entry
   .byte 7
   .byte "cltofat"
 d128link
-  .word d126entry
+  .word d127entry
 d128code
   .word docltofat
 
@@ -1239,21 +1238,12 @@ d129code
   .word doloadblock
 
 ;d130entry
-;  .byte 9
-;  .byte "dumpblock"
+;  .byte 7
+;  .byte "delete2"
 ;d130link
 ;  .word d129entry
 ;d130code
-;  .word dolist
-;d130param
-;  .word loadblockcode
-;  .word crcode
-;  .word dolitcode
-;  .word 31744
-;  .word dolitcode
-;  .word 240
-;  .word dumpcode
-;  .word exitcode
+;  .word dodelete2
 
 d131entry
   .byte 3
@@ -3970,10 +3960,7 @@ continue
   ;; under any interleaved IF/ELSE loops. so we need to look down
   ;; the stack until we find the right place to put it, copy everything
   ;; else, and then insert the address and the flag.
-  dex               ; first, make space for two new cells on the stack
-  dex               ; two cells equals four bytes, so four dex
-  dex
-  dex
+  jsr open2cells    ; first, make space for two new cells on the stack
 
   txa               ; copy X into Y. we'll use Y as the index
   tay               ; for looping down the stack
@@ -5052,11 +5039,6 @@ dosub32
   lda stackbase+8,x ; byte #4
   sbc stackbase+4,x
   sta stackbase+8,x
-;  inx               ; drop the upper two-cell number
-;  inx
-;  inx
-;  inx
-;  jmp next          ; done
   jmp drop2cells
 
 donegate32
@@ -5699,10 +5681,7 @@ continue
   ;; Open five bytes of storage on the stack. These will be
   ;; ten nybbles each holding a single binary-coded decimal
   ;; digit (since 32 bytes stores a max of a ten-digit decimal).
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   dex
   
   ;; that leaves the data to be read at stackbase+6,x through
@@ -5833,10 +5812,7 @@ finalize
 ;;;
 
 do2dup
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda stackbase+5,x
   sta stackbase+1,x
   lda stackbase+6,x
@@ -5851,10 +5827,7 @@ do2drop
   jmp drop2cells
 
 do2over
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda stackbase+9,x
   sta stackbase+1,x
   lda stackbase+10,x
@@ -6622,10 +6595,7 @@ refillstream
 
 moredata
   ;; set up block to read
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda NEXTSECTOR
   sta stackbase+1,x
   lda NEXTSECTOR+1
@@ -7746,30 +7716,19 @@ startload
   sta CURSEC+3
 
 finishload
-  inx               ; clean up the stack
-  inx
-  inx
-  inx
-
+  jsr close2cells   ; clean up the stack
   clc               ; operation successful, so clear carry
   rts
 
 abortread
-  inx               ; clean up the stack
-  inx
-  inx
-  inx
-
+  jsr close2cells   ; clean up the stack
   sec               ; set carry to signal failure
   rts
 
 
 sdloadnext
   ;; copy cached block number onto the stack, adding one
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   clc
   lda CURSEC
   adc #1
@@ -7799,6 +7758,9 @@ sdsaveblock
   lda #SD_CS
   trb PORTB
 
+;  lda #"1
+;  jsr puta
+
   ;; send cmd24 with parameter from the stack
   lda #SPI_CMD+24
   jsr sendbyte
@@ -7813,6 +7775,9 @@ sdsaveblock
   lda #$95          ; crc, doesn't matter
   jsr sendbyte
 
+;  lda #"2
+;  jsr puta
+
 .(
   jsr setidle
   jsr getresponse
@@ -7823,14 +7788,23 @@ sdsaveblock
 continue
 .)
 
+;  lda #"3
+;  jsr puta
+
   jsr sendff
   ;; set cs to 0
   lda #SD_CS
   trb PORTB
 
+;  lda #"4
+;  jsr puta
+
   jsr sendtoken
   jsr sendblock
   jsr setidle
+
+;  lda #"5
+;  jsr puta
 
 .(
   jsr getresponse
@@ -7846,6 +7820,9 @@ continue
 continue
 .)
 
+;  lda #"6
+;  jsr puta
+
   ;; now wait until the card is ready again. card will hold the data
   ;; line low while it is processing.
 .(
@@ -7853,6 +7830,9 @@ busywait
   jsr recv8bits
   beq busywait
 .)
+
+;  lda #"7
+;  jsr puta
 
   ;; update the cache of the current sector number
   lda stackbase+1,x
@@ -7865,14 +7845,11 @@ busywait
   sta CURSEC+3
 
 finishsave
-  inx               ; clean up the stack
-  inx
-  inx
-  inx  
+  jsr close2cells   ; clean up the stack
 
-  lda #"w
-  jsr puta
-
+  ;; there is a huge amount of delay code in here. I think it's
+  ;; just a construction/breadboard problem that is causing crashes
+  ;; after writes, so with luck this can go away later...
 .(
   ldy #255          ; added this loop to see if it prevents
 pauseloop           ; crashes on SAVE-BUFFERS that might be caused
@@ -7883,8 +7860,6 @@ pauseloop           ; crashes on SAVE-BUFFERS that might be caused
   dey
   bne pauseloop
 .)
-  lda #"x
-  jsr puta
 .(
   ldy #255          ; added this loop to see if it prevents
 pauseloop           ; crashes on SAVE-BUFFERS that might be caused
@@ -7895,8 +7870,6 @@ pauseloop           ; crashes on SAVE-BUFFERS that might be caused
   dey
   bne pauseloop
 .)
-  lda #"y
-  jsr puta
 .(
   ldy #255          ; added this loop to see if it prevents
 pauseloop           ; crashes on SAVE-BUFFERS that might be caused
@@ -7907,8 +7880,6 @@ pauseloop           ; crashes on SAVE-BUFFERS that might be caused
   dey
   bne pauseloop
 .)
-  lda #"z
-  jsr puta
 .(
   ldy #255          ; added this loop to see if it prevents
 pauseloop           ; crashes on SAVE-BUFFERS that might be caused
@@ -7919,27 +7890,19 @@ pauseloop           ; crashes on SAVE-BUFFERS that might be caused
   dey
   bne pauseloop
 .)
-  lda #"Z
-  jsr puta
 
   clc               ; all okay, clear error flag
   rts
 
 abortsave
-  inx               ; clean up the stack
-  inx
-  inx
-  inx
+  jsr close2cells   ; clean up the stack
   sec               ; set flag to signal error
   rts
 .)
 
 sdsavenext
   ;; copy cached block number onto the stack, adding one
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   clc
   lda CURSEC
   adc #1
@@ -7995,10 +7958,7 @@ sendloop
 
 ;; load the root directory
 sdloadroot
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda #1            ; sector 513 == 0x00000201
   sta stackbase+1,x
   lda #2
@@ -8014,15 +7974,16 @@ dodir
   ;; BUG should check that there's a disk mounted and present
   ;; load the root directory -- just hardcoding location for now
   ;; BUG calculate this properly
-  stz stackaccess
-  stz stackaccess+1
-  jsr push16
-  lda #2            ; block 513 = 2 in MSB and 1 in LSB
-  sta stackaccess+1
-  lda #1
-  sta stackaccess
-  jsr push16
-  jsr sdloadblock
+  jsr sdloadroot
+;  stz stackaccess
+;  stz stackaccess+1
+;  jsr push16
+;  lda #2            ; block 513 = 2 in MSB and 1 in LSB
+;  sta stackaccess+1
+;  lda #1
+;  sta stackaccess
+;  jsr push16
+;  jsr sdloadblock
   bcc header
   jmp abortdiskerror
 
@@ -8049,7 +8010,7 @@ done
 .)
   jsr crlf
   
-startdir
+nextdirblock
   ;; set pointer to first entry
   lda #<LBLOCK
   sta SCRATCH+6
@@ -8093,11 +8054,8 @@ printext            ; now print extension, if there is one
   lda (SCRATCH+6),y
   jsr puta
   iny
-  lda (SCRATCH+6),y
-  jsr puta
-  iny
-  lda (SCRATCH+6),y
-  jsr puta
+  cpy #11
+  bne printext
 
   lda #8            ; set up field size parameter for rprint
   sta stackaccess
@@ -8105,10 +8063,7 @@ printext            ; now print extension, if there is one
   jsr push16
 
   ldy #28           ; bytes 28-31 are the filesize in bytes
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda (SCRATCH+6),y
   sta stackbase+1,x
   iny
@@ -8134,19 +8089,17 @@ bcc done
 done
 
   ;; check if we have run off the end of the input buffer space
-  ;; (by comparing to the MSB of PAD, which is the space right after).
-  ;; if so, load the next block.
+  ;; (by comparing to the MSB of IOSENTINEL, which is the space
+  ;; right after). if so, load the next block.
   ;; BUG there are 32 blocks allocated to the root directory. should
   ;; count to make sure that we don't exceed that. but I'm presuming
   ;; for the moment that we'll hit a null entry before then.
+  ;; BUG for this to work, IOSENTINEL must be PAGE-aligned
   lda SCRATCH+7
-  cmp #>PAD
+  cmp #>IOSENTINEL
   bne endnext       ; still fine, continue
   jsr sdloadnext
-  lda #<LBLOCK      ; reset pointer to the start of the buffer
-  sta SCRATCH+6
-  lda #>LBLOCK
-  sta SCRATCH+7
+  bra nextdirblock
 endnext
 .)
   bra printdirent
@@ -8380,10 +8333,7 @@ continue
   sta USEBASE+3
 
   ;; clean up the stack
-  inx  
-  inx
-  inx
-  inx
+  jsr close2cells
 
   ;; the old buffers are no longer useful. zero them out
   ;; and reset the pointers.
@@ -8525,10 +8475,7 @@ done
 cltofat
   ;; we are going from two bytes on the stack to six, so
   ;; reserve space
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
 
   ;; cluster number (C) is now at stacbkbase+5/6
   ;; the offset is C mod 256 * 2.
@@ -8598,7 +8545,7 @@ dofatset
 ;;; right point in the FAT. There are two copies of the FAT, so
 ;;; write both of them.
 fatsetsub
-  jsr cltofat       ; get FAT cluster and offset
+  jsr cltofat       ; get FAT sector and offset
   lda stackbase+2,x ; put offset out of the way
   pha
   lda stackbase+1,x
@@ -8620,10 +8567,7 @@ fatsetsub
   lda stackaccess+1
   sta (SCRATCH),y
 
-  dex               ; make space for a double on the stack
-  dex
-  dex
-  dex
+  jsr open2cells    ; make space for a double on the stack
   lda CURSEC        ; write in current disk block number
   sta stackbase+1,x ; cached at load time
   lda CURSEC+1
@@ -8634,10 +8578,7 @@ fatsetsub
   sta stackbase+4,x
   jsr sdsaveblock   ; write back the block
 
-  dex               ; do it again for the second copy of the FAT
-  dex               ; make space for a double on the stack
-  dex
-  dex
+  jsr open2cells    ; do it again for the second copy of the FAT
   lda CURSEC        ; write in current disk block number
   sta stackbase+1,x ; cached at load time
   lda CURSEC+1
@@ -8648,8 +8589,8 @@ fatsetsub
   lda CURSEC+3
   sta stackbase+4,x
   jsr sdsaveblock   ; write back the block
-  lda #"!
-  jsr puta
+;  lda #"!
+;  jsr puta
   rts
 
 ;; BUG BUG TESTING ONLY
@@ -8685,10 +8626,7 @@ findfreecluster
 
 searchnextblock
   ;; load a sector of the FAT. Put sector number on the stack and load.
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   lda SCRATCH+2
   sta stackbase+1,x
   lda SCRATCH+3
@@ -8840,12 +8778,7 @@ nameloop
   cpy #11
   bne nameloop
 success
-  dex               ; we found a match, so return this pointer
-  dex               ; and the block in which it was found
-  dex
-  dex
-  dex
-  dex
+  jsr open3cells    ; found a match. return pointer and sector number.
   lda SCRATCH+6
   sta stackbase+1,x
   lda SCRATCH+7
@@ -8922,12 +8855,7 @@ matchentry
   cmp #$E5          ; $E5 also means slot is free
   bne matchfail
 success
-  dex               ; we found a match, so return this pointer
-  dex               ; and the block in which it was found
-  dex
-  dex
-  dex
-  dex
+  jsr open3cells    ; found a match. return pointer and sector number.
   sec
   lda SCRATCH+6
   sbc #<LBLOCK
@@ -8958,8 +8886,8 @@ matchfail
   cmp #>PAD         ; run off the end of the buffer?
   bne matchloop
   jsr sdloadnext    ; load next block
-  lda #"+
-  jsr puta
+;  lda #"+
+;  jsr puta
   bra searchonesector
 
 ;; hit the end of directory without a match. return 0.
@@ -9053,30 +8981,14 @@ done
 ;;; BUG TMP TESTING
 domkfile
   jsr mkfile
-  lda #"$
-  jsr puta
-  jsr crlf
   jmp next
 
-;;; create a new file
+;;; create a new file BUG SHOULD ENSURE NAME NOT USED
 mkfile
-  ;; get name
-  jsr readnext
+  jsr readnext      ; get the filename, leaving it in WORD
 
-  ;; canonicalize name, leave result in PAD
-  jsr mkcanon
-
-  jsr crlf
-  lda #"0
-  jsr puta
-  jsr printstacksub
-  jsr crlf
   ;; find available cluster. returns cluster number.
   jsr findfreecluster
-  lda #"a
-  jsr puta
-  jsr printstacksub
-  jsr crlf
 
   ;; cache cluster #
   lda stackbase+1,x
@@ -9085,7 +8997,7 @@ mkfile
   sta SCRATCH+15
 
   ;; allocate cluster. set up the stack with the write value ($ffff)
-  ;; and cluster number, then call routine to set it
+  ;; and cluster number, then call routine to set it.
   lda #$ff
   sta stackbase+1,x
   sta stackbase+2,x
@@ -9095,70 +9007,45 @@ mkfile
   sta stackbase+1,x
   lda SCRATCH+15
   sta stackbase+2,x
-  lda #"b
-  jsr puta
-  jsr printstacksub
-  jsr crlf
   jsr fatsetsub
-  lda #"c
-  jsr puta
-  jsr printstacksub
-  jsr crlf
 
   ;; find directory slot. returns sector and offset. sector is loaded.
-  lda #"d
-  jsr puta
   jsr findfreedir
 .(
   bcc continue
   jmp abortmkfile
 continue
 .)
-  jsr printstacksub
-  jsr crlf
 
   clc
   lda stackbase+1,x
   adc #<LBLOCK
   sta SCRATCH+2
-  sta stackaccess
+  sta stackaccess   ; BUG WHY THIS?
   lda stackbase+2,x
   adc #>LBLOCK
   sta SCRATCH+3
-  sta stackaccess+1
+  sta stackaccess+1 ; AND THIS?
 
-  lda #"e
-  jsr puta
-
-  jsr mkcanon       ; restore canonical version, oops
-  lda #"E
-  jsr puta
+  jsr mkcanon       ; rewrite name in canonical form
 
   ;; NOTE stack is 6 bytes deep here after findfreedir
 
   ;; set name
-.(
-  ldy #0
-nextchar
-  lda PAD,y
-  jsr puta
-  sta (SCRATCH+2),y
-  iny
-  cpy #11
-  bne nextchar
-.)
-  jsr crlf
-
-  lda #"f
-  jsr puta
+  dex
+  dex
+  lda SCRATCH+2
+  sta stackbase+1,x
+  lda SCRATCH+3
+  sta stackbase+2,x
+  jsr copypadname
+  inx
+  inx
 
   ;; set attributes
   lda #0
   ldy #$0B
   sta (SCRATCH+2),y
-
-  lda #"g
-  jsr puta
 
   ;; set dates
   lda #0
@@ -9177,8 +9064,6 @@ nextchar
   iny  ; 13
   sta (SCRATCH+2),y
 
-  lda #"h
-  jsr puta
   ;; set cluster #
   ldy #$1A
   lda SCRATCH+14
@@ -9187,8 +9072,6 @@ nextchar
   lda SCRATCH+15
   sta (SCRATCH+2),y
 
-  lda #"i
-  jsr puta
   ;; set size
   ldy #$1C
   lda #0
@@ -9203,9 +9086,6 @@ nextchar
   lda #0
   sta (SCRATCH+2),y
 
-  lda #"j
-  jsr puta
-
   ;; stack currently has directory block and offset for
   ;; entry we've been filling. Drop offset and write
   ;; directory block.
@@ -9213,18 +9093,146 @@ nextchar
   inx
   jsr sdsaveblock
 
-  lda #"z
-  jsr puta
-  jsr crlf
-
   ;; return
   rts
 
-
 abortmkfile
   ;; BUG BUG UNALLOCATE FAT AND ISSUE ERROR MESSAGE
-  lda #"!
-  jsr puta
+  rts
+
+;;; TESTING
+dorename
+  jsr renamefile
+  jmp next
+
+;;; rename a file, taking both old and new names from the input stream
+renamefile
+  jsr readnext
+  jsr lookupdir
+.(
+  bcc continue
+  jmp abortgenericsub
+continue
+.)
+  ;; at this point, stack should have sector number and pointer,
+  ;; and the sector should be loaded in the I/O buffer.
+  jsr readnext      ; get destination filename
+  jsr mkcanon       ; canonicalize
+
+  ;; make sure that this file does NOT exist
+.(
+  jsr lookupdir
+  bcs continue
+  jsr close3cells   ; throw away results from this lookupdir
+  jsr close3cells   ; and from the last one
+  bra abortgenericsub
+continue
+.)
+  clc
+  jsr copypadname   ; copy name from pad to address on stack
+  inx               ; drop that pointer from the stack
+  inx
+  jsr sdsaveblock   ; write back the directory data
+  rts
+
+abortgenericsub
+  lda #<generic
+  sta PRINTVEC
+  lda #>generic
+  sta PRINTVEC+1
+  jsr printvecstr
+  rts
+
+;;; TEMPORARY
+
+dodelete
+  jsr deletefile
+  jmp next
+
+
+deletefile
+  jsr readnext
+  jsr lookupdir
+.(
+  bcc continue
+  jmp abortgenericsub
+continue
+.)
+
+  lda stackbase+1,x ; grab data address
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ldy #$1a          ; cache cluster number
+  lda (SCRATCH),y
+  sta SCRATCH+2
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+3
+
+  lda #$e5          ; mark directory entry as unused
+  sta (SCRATCH)
+  inx               ; drop pointer from stack,
+  inx               ; leaving just sector number
+  jsr sdsaveblock   ; write back directory
+
+  ;; now mark cluster as unused. First, put $0000 (free) on stack
+  jsr open2cells
+  stz stackbase+3,x
+  stz stackbase+4,x
+  ;; now put cached cluster number on stack
+  lda SCRATCH+2
+  sta stackbase+1,x
+  lda SCRATCH+3
+  sta stackbase+2,x
+  ;jsr printstacksub
+  jsr fatsetsub     ; update fat
+
+  ;; end
+  rts
+
+
+;;; interpret the address on the stack as an offset into the I/O
+;;; buffer. Copy the filename from the PAD into that address.
+;;; Note that this does NOT clear the address off the stack.
+copypadname
+.(
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ldy #0
+nextchar
+  lda PAD,y
+  sta (SCRATCH),y
+  iny
+  cpy #11
+  bne nextchar
+  rts
+.)
+
+
+
+close3cells
+  inx
+  inx
+close2cells
+  inx
+  inx
+  inx
+  inx
+  rts
+
+open3cells
+  dex
+  dex
+open2cells
+  dex
+  dex
+  dex
+  dex
   rts
 
 
@@ -11705,5 +11713,6 @@ diskerrormsg:    .byte " disk error", $00
 dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $00
 blockcountmsg:   .byte " exceeds file block count", $00
+generic:	 .byte " generic error",$00
 bytesfree:       .byte " bytes free", $00
 hextable:	 .byte "0123456789ABCDEF"
