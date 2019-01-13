@@ -15,7 +15,9 @@
 ;;; for a RAM-resident configuration.
 ;;;
 ;;; More of this code than you would expect was written in the
-;;; United Club at LAX Terminal 7.
+;;; United Club at LAX Terminal 7. Other places have included
+;;; the State Library of New South Wales, a hotel room in Estonia,
+;;; and an AirBNB at Joshua Tree.
 ;;;
 ;;; SECND is covered by the Creative Commons CC-BY-4.0 license.
 ;;; Code can be shared and adapted but authorship must be acknowledged.
@@ -4896,29 +4898,11 @@ continue
   jmp next
 
 
-;;; THIS CODE DUE TO BE DELETED
-;;; Temporarily switch input to region at location specified on
-;;; the stack.
-;;; BUG shouldn't flush input. can we preserve the current buffer
-;;; location on the stack and restore it at the end of the load?
-docload
-  ;; BUG FIX THIS LATER NO LONGER WORKS
-  jsr pop16         ; load address from the stack and set it
-  lda stackaccess   ; as the memory region from which to read
-  sta INBUFF        ; input text.
-  lda stackaccess+1
-  sta INBUFF+1
-  inc SOURCE        ; 0 is terminal, non-zero is memory
-  jmp next
-
 donip
   lda stackbase+1,x
   sta stackbase+3,x
   lda stackbase+2,x
   sta stackbase+4,x
-;  inx
-;  inx
-;  jmp next
   jmp drop1cell
 
 ;;; ( x1 x2 -- x2 x1 x2)
@@ -7370,8 +7354,12 @@ success
   jsr sendff
   jsr cmd17
 
+  lda #<LBLOCK
+  sta SCRATCH+8
+  lda #>LBLOCK
+  sta SCRATCH+9
   jsr gettoken
-  jsr getblock
+  jsr getblocks8
 
 .(
 
@@ -7651,29 +7639,30 @@ gettoken
   bne gettoken
   rts
 
-getblock
+
+;;; read incoming data from the SD card and store it in memory at
+;;; location pointed to by SCRATCH+8 and +9.
+getblocks8
+
+  ;; get first 256 bytes
 .(
-  ;; get 256 bytes at LBLOCK
-  stz SCRATCH+8
-  lda #>LBLOCK
-  sta SCRATCH+9
+  ldy #0
 loop
   jsr recv8bits
-  sta (SCRATCH+8)
-  inc SCRATCH+8
+  sta (SCRATCH+8),y
+  iny
   bne loop
 .)
+  inc SCRATCH+9
 .(
-  ;; get 256 bytes at HBLOCK
-  stz SCRATCH+8
-  lda #>HBLOCK
-  sta SCRATCH+9
+  ;; get second 256 bytes
 loop
   jsr recv8bits
-  sta (SCRATCH+8)
-  inc SCRATCH+8
+  sta (SCRATCH+8),y
+  iny
   bne loop
 .)
+
   ; get CRC but ignore it. 16 bits, so two byte reads.
   jsr recv8bits
   jsr recv8bits
@@ -7742,8 +7731,12 @@ startload
   cmp #0
   bne abortread
 
+  lda #<LBLOCK
+  sta SCRATCH+8
+  lda #>LBLOCK
+  sta SCRATCH+9
   jsr gettoken
-  jsr getblock
+  jsr getblocks8
 
   ;; update cache of current sector number
   lda stackbase+1,x
@@ -9390,18 +9383,52 @@ recv8bits
   dec PORTB         ; set clock off
   ;; now fall through to receive next seven bits
 
-recv7bits
+recv7bits           ; used to be a loop, unrolled for speed
 .(
-  ldy #7            ; count up to seven bits
-  phx               ; store X, since we'll use it
-recvloop
-  inc PORTB         ; set CLK high
+  phx               ; store X, since we'll use it (and can't use Y)
+
+  inc PORTB         ; set CLK high #1
   ldx PORTB         ; get data into X
   cpx #128          ; set carry flag to top bit of data
   rol               ; roll that into the accumulator
   dec PORTB         ; set CLK low
-  dey               ; update bit count
-  bne recvloop      ; loop until finished
+
+  inc PORTB         ; set CLK high #2
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
+  inc PORTB         ; set CLK high #3
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
+  inc PORTB         ; set CLK high #4
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
+  inc PORTB         ; set CLK high #5
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
+  inc PORTB         ; set CLK high #6
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
+  inc PORTB         ; set CLK high #7
+  ldx PORTB         ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec PORTB         ; set CLK low
+
   plx               ; restore X
 .)
   rts               ; return with data in A
@@ -9579,10 +9606,7 @@ clean
 flushbuf
 
   ;; make space on the stack for the sector number
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
   
   ;; convert buffer number to sector number and store on stack
   ldy #1
@@ -9631,7 +9655,6 @@ copyloop
   lda (SCRATCH+2),y
   sta LBLOCK,y
   iny
-  cpy #0
   bne copyloop
 .)
 
@@ -9644,7 +9667,6 @@ copyloop
   lda (SCRATCH+2),y
   sta HBLOCK,y
   iny
-  cpy #0
   bne copyloop
 .)
 
@@ -9662,7 +9684,6 @@ copyloop
   lda (SCRATCH+2),y
   sta LBLOCK,y
   iny
-  cpy #0
   bne copyloop
 .)
 
@@ -9675,7 +9696,6 @@ copyloop
   lda (SCRATCH+2),y
   sta HBLOCK,y
   iny
-  cpy #0
   bne copyloop
 .)
 
