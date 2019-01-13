@@ -42,7 +42,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$4000
+USERBASE=$3C00
 #endif
 
 ;;;
@@ -63,8 +63,9 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 0080 through 00FF is operand stack
 ;;; 0100 through 01FF is the hardware stack as usual
 ;;; 0200 through 02FF is the return stack (more space than needed)
-;;; 0300 through 1FFF is the interpreter and compiler code (this file)
-;;; 2000 through 63DF is user dictionary space
+;;; 0300 through 3BFF is the interpreter and compiler code (this file)
+;;; 3C00 through 633F is user dictionary space
+;;; 6340 through 63DF is temporary string space
 ;;; 63E0 through 7BFF is I/O block space
 ;;; 7C00 through 7DFF is low-level SD I/O buffer space (512 byte block)
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
@@ -117,6 +118,8 @@ USE=$0070           ; and 0071
 PREV=$0072          ; and 0073
 USENAME=$0074       ; through 007F
 RBASE=$0200         ; base for R-stack
+RESERVED=$6340      ; high water mark for user data
+TEMPSTR=$6340       ; temporary string storage (for S")
 FIRST=$63E0         ; start of space for blocks/disk buffers
 LBLOCK=$7C00        ; address of lower I/O data page
 HBLOCK=$7D00        ; address of upper I/O data page
@@ -1237,19 +1240,19 @@ loadblockcode
 d129code
   .word doloadblock
 
-;d130entry
-;  .byte 7
-;  .byte "delete2"
-;d130link
-;  .word d129entry
-;d130code
-;  .word dodelete2
+d130entry
+  .byte 5
+  .byte "ident"
+d130link
+  .word d129entry
+d130code
+  .word doident
 
 d131entry
   .byte 3
   .byte "dir"
 d131link
-  .word d129entry
+  .word d130entry
 d131code
   .word dodir
 
@@ -3017,9 +3020,14 @@ doabortq
   sta (DP),y
   bra compilestr
 
-;;; This is the compiler behavior for S"; it compiles dostrlit
-;;; and an inline string constant. (do-s-quote)
+;;; When compiled, S" compiles dostrlit and an inline string constant.
+;;; When interpreted, it stashes the string in a temporary space and
+;;; leaves a pointer on the stack
 dosquote
+  lda STATUS
+  bit #COMPILE
+  beq interpsq
+
   ldy #1
   lda #<sliteralcode
   sta (DP)
@@ -3066,6 +3074,28 @@ charloop
   sta DP+1
 
   jmp next          ; done
+
+interpsq
+  jsr assemblestr   ; assemble string onto PAD
+  ldy PAD           ; copy string length
+  sty TEMPSTR
+.(
+charloop            ; copy string contents (backwards from end)
+  lda PAD,y
+  sta TEMPSTR,y
+  dey
+  bne charloop
+.)
+
+  ;; leave address on the stack
+  dex
+  dex
+  lda #<TEMPSTR
+  sta stackbase+1,x
+  lda #>TEMPSTR
+  sta stackbase+2,x
+
+  jmp next
 
 
 ;;; Read text from the input buffer up until a single quote mark
@@ -5895,13 +5925,23 @@ unusedsub
   dex
   dex
   sec
-  lda #<FIRST
+  lda #<RESERVED
   sbc DP
   sta stackbase+1,x
-  lda #>FIRST
+  lda #>RESERVED
   sbc DP+1
   sta stackbase+2,x
   rts
+
+doident
+  lda #32
+  jsr puta
+  lda #<greeting
+  sta PRINTVEC
+  lda #>greeting
+  sta PRINTVEC+1
+  jsr printvecstr
+  jmp next
 
 dohex
   lda #16
