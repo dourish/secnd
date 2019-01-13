@@ -7725,6 +7725,7 @@ startload
   jmp sdloadtomem
 
 skipload  
+  jsr close2cells   ; discard the sector address
   rts
 .)
 
@@ -7804,10 +7805,31 @@ sdloadnext
   jmp sdloadbuf
 
 
+;;; save standard I/O buffer to sector identified by a double on
+;;; the stack
+sdsavebuf
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+  jmp sdsavefrommem
+
 ;;; Save to block specified by double on the stack, translating between
-;;; number formats.
-sdsaveblock
+;;; number formats. Takes address from stack to identify memory to
+;;; save
+sdsavefrommem
 .(
+  ;; take memory address and put in in SCRATCH+8/9, where sendblocks8
+  ;; will find it
+  lda stackbase+1,x
+  sta SCRATCH+8
+  lda stackbase+2,x
+  sta SCRATCH+9
+  inx
+  inx
+
   jsr sendff
 
   ;; set cs to 0
@@ -7856,7 +7878,7 @@ continue
 ;  jsr puta
 
   jsr sendtoken
-  jsr sendblock
+  jsr sendblocks8
   jsr setidle
 
 ;  lda #"5
@@ -7974,7 +7996,7 @@ sdsavenext
   sta stackbase+4,x
 
   ;; now jump to regular block save code
-  jmp sdsaveblock
+  jmp sdsavebuf
 
 
 sendtoken
@@ -7982,31 +8004,31 @@ sendtoken
   jsr sendbyte
   rts
 
-sendblock
-  phx
-  ;; send the first 256 bytes from LBLOCK
-  ldx #0
+
+sendblocks8
+  ;; send the first 256 bytes
+  ldy #0
 .(
 sendloop
-  lda LBLOCK,x
+  lda (SCRATCH+8),y
   jsr sendbyte
-  inx
+  iny
   bne sendloop
 .)
 
-  ;; send the second 256 bytes from HBLOCK
-  ldx #0
+  inc SCRATCH+9
+
+  ;; send the second 256 bytes. y is already 0.
 .(
 sendloop
-  lda HBLOCK,x
+  lda (SCRATCH+8),y
   jsr sendbyte
-  inx
+  iny
   bne sendloop
 .)
   lda #0
   jsr sendbyte      ; types for CRC
   jsr sendbyte
-  plx
   rts
 
 ;; UPPER LAYER - FAT16 FILESYSTEM
@@ -8632,7 +8654,7 @@ fatsetsub
   sta stackbase+3,x
   lda CURSEC+3
   sta stackbase+4,x
-  jsr sdsaveblock   ; write back the block
+  jsr sdsavebuf     ; write back the block
 
   jsr open2cells    ; do it again for the second copy of the FAT
   lda CURSEC        ; write in current disk block number
@@ -8644,7 +8666,7 @@ fatsetsub
   sta stackbase+3,x
   lda CURSEC+3
   sta stackbase+4,x
-  jsr sdsaveblock   ; write back the block
+  jsr sdsavebuf     ; write back the block
 ;  lda #"!
 ;  jsr puta
   rts
@@ -9147,7 +9169,7 @@ continue
   ;; directory block.
   inx
   inx
-  jsr sdsaveblock
+  jsr sdsavebuf
 
   ;; return
   rts
@@ -9170,12 +9192,13 @@ renamefile
   jmp abortgenericsub
 continue
 .)
+
   ;; at this point, stack should have sector number and pointer,
   ;; and the sector should be loaded in the I/O buffer.
   jsr readnext      ; get destination filename
   jsr mkcanon       ; canonicalize
 
-  ;; make sure that this file does NOT exist
+  ;; make sure that the destination file does NOT exist
 .(
   jsr lookupdir
   bcs continue
@@ -9183,12 +9206,27 @@ continue
   jsr close3cells   ; and from the last one
   bra abortgenericsub
 continue
+  ;; reload original block in case we just trashed it
+  jsr open2cells
+  lda stackbase+7,x
+  sta stackbase+1,x
+  lda stackbase+8,x
+  sta stackbase+2,x
+  lda stackbase+9,x
+  sta stackbase+3,x
+  lda stackbase+10,x
+  sta stackbase+4,x
+  jsr sdloadbuf
+
 .)
+
   clc
   jsr copypadname   ; copy name from pad to address on stack
   inx               ; drop that pointer from the stack
   inx
-  jsr sdsaveblock   ; write back the directory data
+  jsr sdsavebuf     ; write back the directory data
+  bcs abortgenericsub
+
   rts
 
 abortgenericsub
@@ -9231,7 +9269,7 @@ continue
   sta (SCRATCH)
   inx               ; drop pointer from stack,
   inx               ; leaving just sector number
-  jsr sdsaveblock   ; write back directory
+  jsr sdsavebuf     ; write back directory
 
   ;; now mark cluster as unused. First, put $0000 (free) on stack
   jsr open2cells
@@ -9297,6 +9335,7 @@ open2cells
 
 
 sendbyte
+  phy
   ldy #8
 sendloop
   asl
@@ -9315,6 +9354,7 @@ send
   pla
   dey
   bne sendloop
+  ply
   rts
 
 ;; wait for data by pulsing the clock until there's a zero on MISO
@@ -9694,7 +9734,7 @@ copyloop
 .)
 
   ;; write first sector. removes address from the stack.
-  jsr sdsaveblock
+  jsr sdsavebuf
   bcs endflush
 
   ;; copy data for second sector from buffer to I/O space
