@@ -6630,7 +6630,7 @@ moredata
   sta stackbase+4,x
 
   ;; read data
-  jsr sdloadblock
+  jsr sdloadbuf
   lda LBLOCK
 
   ;; do I need to place a sentinel value in there? ie, were there fewer
@@ -7673,7 +7673,7 @@ loop
 
 doloadblock
 .(
-  jsr sdloadblock
+  jsr sdloadbuf
   bcc done
   jmp abortdiskerror
 done
@@ -7685,10 +7685,9 @@ done
 ;;
 
 
-;;; Load block specified by double on the stack, translating between
-;;; number formats.
-sdloadblock
-
+;;; load sector passed on the stack into the standard I/O buffer.
+sdloadbuf
+.(
   ;; check if this block is already loaded.
   lda stackbase+1,x
   cmp CURSEC
@@ -7703,9 +7702,46 @@ sdloadblock
   cmp CURSEC+3
   bne startload
   clc               ; make sure carry is clear (error signal)
-  bra finishload    ; jump to end, clean up stack
-  
+  bra skipload      ; jump to end, clean up stack
+
 startload
+  ;; update cache of current sector number
+  lda stackbase+1,x
+  sta CURSEC
+  lda stackbase+2,x
+  sta CURSEC+1
+  lda stackbase+3,x
+  sta CURSEC+2
+  lda stackbase+4,x
+  sta CURSEC+3
+
+  ;; add load address onto the stack
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+  jmp sdloadtomem
+
+skipload  
+  rts
+.)
+
+;;; Load block specified by double on the stack (translating between
+;;; number formats). Places data at a memory block signalled on
+;;; the stack
+sdloadtomem
+.(
+  ;; take memory target address off the stack and place it into
+  ;; SCRATCH+8/9 (where getblock will look for it)
+  lda stackbase+1,x
+  sta SCRATCH+8
+  lda stackbase+2,x
+  sta SCRATCH+9
+  inx
+  inx
+
   jsr sendff
 
   ;; set cs to 0
@@ -7731,22 +7767,9 @@ startload
   cmp #0
   bne abortread
 
-  lda #<LBLOCK
-  sta SCRATCH+8
-  lda #>LBLOCK
-  sta SCRATCH+9
   jsr gettoken
   jsr getblocks8
-
-  ;; update cache of current sector number
-  lda stackbase+1,x
-  sta CURSEC
-  lda stackbase+2,x
-  sta CURSEC+1
-  lda stackbase+3,x
-  sta CURSEC+2
-  lda stackbase+4,x
-  sta CURSEC+3
+.)
 
 finishload
   jsr close2cells   ; clean up the stack
@@ -7778,7 +7801,7 @@ sdloadnext
 
   ;; now jump to regular block load code, skipping cache check
   ;; (because we know it's different, clearly).
-  jmp startload
+  jmp sdloadbuf
 
 
 ;;; Save to block specified by double on the stack, translating between
@@ -7998,7 +8021,7 @@ sdloadroot
   sta stackbase+2,x
   stz stackbase+3,x
   stz stackbase+4,x
-  jmp sdloadblock
+  jmp sdloadbuf
   
 
 ;;; List files from the root directory
@@ -8194,7 +8217,7 @@ continue
 
   ;; turn block count on stack into sector count, and load the sector
   jsr cltosector
-  jsr sdloadblock
+  jsr sdloadbuf
 
   ;; now type what's in the block, up to the file size. we print in
   ;; blocks of 256 bytes, but we do so twice because the buffer is
@@ -8549,7 +8572,7 @@ fatatsub
   pha
   inx
   inx
-  jsr sdloadblock
+  jsr sdloadbuf
   dex
   dex
   clc
@@ -8585,7 +8608,7 @@ fatsetsub
   pha
   inx
   inx
-  jsr sdloadblock   ; load block
+  jsr sdloadbuf     ; load sector to buffer
   clc
   pla               ; get offset back
   adc #<LBLOCK      ; add LBLOCK to offset to find entry
@@ -8668,7 +8691,7 @@ searchnextblock
   sta stackbase+3,x
   lda SCRATCH+5
   sta stackbase+4,x
-  jsr sdloadblock
+  jsr sdloadbuf
 
   ;; set up the offset pointer
   lda #<LBLOCK
@@ -9747,10 +9770,7 @@ blocksub
 
 loadit
   ;; clear some working space on the stack
-  dex
-  dex
-  dex
-  dex
+  jsr open2cells
 
   ;; at this point, stackbase+1/2/3/4 are my working space (and will
   ;; be a sector numer). stackbase+5/6 is the buffer address.
@@ -9770,103 +9790,155 @@ loadit
   ;; translate block into a sector number. note that blocks
   ;; are numbered from 1, but we have already subtracted that.
   ;; multiply by two, and add the base address. leave result on
-  ;; the stack.
+  ;; the stack. cache a copy on the hardware stack too
   asl stackbase+1,x
   rol stackbase+2,z
   clc
   lda stackbase+1,x
   adc USEBASE
   sta stackbase+1,x
+  pha
   lda stackbase+2,x
   adc USEBASE+1
   sta stackbase+2,x
+  pha
   lda USEBASE+2
   adc #0
   sta stackbase+3,x
+  pha
   lda USEBASE+3
   adc #0
   sta stackbase+4,x
+  pha
 
-  ;; load the first sector (512 bytes), removes four byte address
-  ;; from the stack
-  jsr sdloadblock
+  ;; add a new cell to the top of the stack and copy the buffer
+  ;; address into it
+  dex
+  dex
+  lda stackbase+7,x ; was +5, now +7
+  sta stackbase+1,x
+  lda stackbase+8,x
+  sta stackbase+2,x
+
+  ;; load the first sector (512 bytes), removes four byte
+  ;; sector number and two byte memory address from stack
+  jsr sdloadtomem
 
   ;; BUG ought to test for load error here
 
   ;; so now, stackbase+1/2 is the buffer address.
   ;; stackbase+3/4 is the block number that was passed in.
 
-  ;; copy into the buffer
-  lda stackbase+1,x ; SCRATCH+2/3 hold destination pointer
-  sta SCRATCH+2     ; initially, the buffer pointer
+;  ;; copy into the buffer
+;  lda stackbase+1,x ; SCRATCH+2/3 hold destination pointer
+;  sta SCRATCH+2     ; initially, the buffer pointer
+;  lda stackbase+2,x
+;  sta SCRATCH+3
+;
+;  lda #<LBLOCK      ; SCRATCH+4/5 hold the source pointer
+;  sta SCRATCH+4     ; initially, LBLOCK
+;  lda #>LBLOCK
+;  sta SCRATCH+5
+;
+;.(
+;  ldy#0
+;copyloop
+;  lda (SCRATCH+4),y
+;  sta (SCRATCH+2),y
+;  iny
+;  cpy #0
+;  bne copyloop
+;.)
+;
+;  inc SCRATCH+3     ; bump destination pointer to next page
+;  lda #<HBLOCK      ; switch source pointer to HBLOCK
+;  sta SCRATCH+4
+;  lda #>HBLOCK
+;  sta SCRATCH+5
+;.(
+;  ldy#0
+;copyloop
+;  lda (SCRATCH+4),y
+;  sta (SCRATCH+2),y
+;  iny
+;  cpy #0
+;  bne copyloop
+;.)
+
+  ;; retreive the sector number, add one, add put the value on the stack
+  jsr open2cells
+  pla
+  sta stackbase+4,x
+  pla
+  sta stackbase+3,x
+  pla
+  sta stackbase+2,x
+  pla
+  sta stackbase+1,x
+
+  ;; add one for next sector
+  clc
+  lda stackbase+1,x
+  adc #1
+  sta stackbase+1,x
   lda stackbase+2,x
-  sta SCRATCH+3
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
 
-  lda #<LBLOCK      ; SCRATCH+4/5 hold the source pointer
-  sta SCRATCH+4     ; initially, LBLOCK
-  lda #>LBLOCK
-  sta SCRATCH+5
 
-.(
-  ldy#0
-copyloop
-  lda (SCRATCH+4),y
-  sta (SCRATCH+2),y
-  iny
-  cpy #0
-  bne copyloop
-.)
-
-  inc SCRATCH+3     ; bump destination pointer to next page
-  lda #<HBLOCK      ; switch source pointer to HBLOCK
-  sta SCRATCH+4
-  lda #>HBLOCK
-  sta SCRATCH+5
-.(
-  ldy#0
-copyloop
-  lda (SCRATCH+4),y
-  sta (SCRATCH+2),y
-  iny
-  cpy #0
-  bne copyloop
-.)
+  ;; put the buffer address, plus 512, onto the stack
+  ;; add a new cell to the top of the stack and copy the buffer
+  ;; address into it
+  dex
+  dex
+  clc
+  lda stackbase+7,x ; was +5, now +7
+  sta stackbase+1,x
+  lda stackbase+8,x
+  adc #2            ; plus 512, for upper half of the block
+  sta stackbase+2,x
 
   ;; load the second sector (512 bytes) for full 1k block
-  jsr sdloadnext
+  jsr sdloadtomem
 
   ;; BUG ought to test for load error here...
 
-  inc SCRATCH+3     ; bump destination pointer to next page
-  lda #<LBLOCK      ; set source pointer back to LBLOCK
-  sta SCRATCH+4
-  lda #>LBLOCK
-  sta SCRATCH+5
-
-.(
-  ldy#0
-copyloop
-  lda (SCRATCH+4),y
-  sta (SCRATCH+2),y
-  iny
-  cpy #0
-  bne copyloop
-.)
-
-  inc SCRATCH+3     ; bump destination pointer to next page
-  lda #<HBLOCK      ; and source pointer to HBLOCK
-  sta SCRATCH+4
-  lda #>HBLOCK
-  sta SCRATCH+5
-.(
-  ldy#0
-copyloop
-  lda (SCRATCH+4),y
-  sta (SCRATCH+2),y
-  iny
-  cpy #0
-  bne copyloop
-.)
+;  inc SCRATCH+3     ; bump destination pointer to next page
+;  lda #<LBLOCK      ; set source pointer back to LBLOCK
+;  sta SCRATCH+4
+;  lda #>LBLOCK
+;  sta SCRATCH+5
+;
+;.(
+;  ldy#0
+;copyloop
+;  lda (SCRATCH+4),y
+;  sta (SCRATCH+2),y
+;  iny
+;  cpy #0
+;  bne copyloop
+;.)
+;
+;  inc SCRATCH+3     ; bump destination pointer to next page
+;  lda #<HBLOCK      ; and source pointer to HBLOCK
+;  sta SCRATCH+4
+;  lda #>HBLOCK
+;  sta SCRATCH+5
+;.(
+;  ldy#0
+;copyloop
+;  lda (SCRATCH+4),y
+;  sta (SCRATCH+2),y
+;  iny
+;  cpy #0
+;  bne copyloop
+;.)
 
   ;; now that we've successfully loaded the data,
   ;; update the block number in the buffer header
