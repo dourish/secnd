@@ -8231,10 +8231,17 @@ endofdir
   rts
 
 
-;; NOTE this uses SCRATCH+4,5,12,13,14,15 (still true?)
+;; NOTE this uses SCRATCH+4,5,12,13,14,15 (BUG still true?)
 doshow
-
   jsr readnext      ; get next word and put it into input buffer
+  jsr showsub
+  jmp next
+
+
+;;; this is broken out as a subroutine so that it can be shared
+;;; with the disk manager. presumes on entry that the filename
+;;; is in WORD.
+showsub
   jsr lookupdir     ; look up in the directory
 
 .(
@@ -8375,7 +8382,7 @@ nextblock
 
 endshow
   jsr crlf
-  jmp next
+  rts
 
 
 ;;; USING specifies the block file from which subsequent block
@@ -11324,11 +11331,11 @@ readsign
   ldy #0            ; y indexes digits of the input string
 
   ;; first, check if the first character is a minus
+  stz SCRATCH       ; by default, a positive number
   lda (stackaccess),y
   cmp #$2d
   bne checkbase     ; it is not, so proceed as usual
-  lda #1            ; set a flag; we'll process this later
-  sta SCRATCH
+  inc SCRATCH       ; set a flag; we'll process this later
   iny
 
 checkbase
@@ -12050,11 +12057,13 @@ success
   bcc skip2
   inc SCRATCH+1
 skip2
+  phy
   ldy #1
   lda (SCRATCH)
   sta SCRATCH+11
   lda (SCRATCH),y
   sta SCRATCH+12
+  ply
   ;; do the jsr
   jsr indjsr
   bra cmdloop
@@ -12079,38 +12088,66 @@ endoftable
 .)
 
 indjsr
-  jmp ($001B)
-
-;fakeloop
-;  lda #"=
-;  jsr puta
-;  jsr readtermline
-;  jsr crlf
-;
-;  lda INPUT
-;  cmp #"f
-;  bne cmdloop1
-;  jsr midway
-;  bra cmdloop
-;cmdloop1
-;  cmp #"d
-;  bne cmdloopn
-;  jsr dirsub
-;  bra cmdloop
-;cmdloopn
-;  lda #"?
-;  jsr puta
-;  jsr crlf
-;  bra cmdloop
-
+  jmp (SCRATCH+11)
 
 dmshow
-  rts
-dmxrecv
-  rts
-dmgo
+  jsr paramtoword
+;  jmp showsub
   rts
 
+dmxrecv
+  rts
+
+dmgo
+  jsr paramtoword
+go1
+  lda #0
+  ldy WORD
+  iny
+  sta WORD,y
+  clc
+  lda #<WORD
+  adc #1
+  sta stackaccess
+  lda #>WORD
+  adc #0
+  sta stackaccess+1
+  jsr push16
+  jsr readsign
+go2
+  ;; double it -- just for testing
+  clc
+  asl stackbase+1,x
+  rol stackbase+2,x
+  jsr print16s
+  jsr crlf
+;  jsr pop16
+;  lda stackaccess
+;  sta SCRATCH+11
+;  lda stackaccess+1
+;  sta SCRATCH+12
+;  jsr indjsr
+  rts
+
+
+;;; copy the parameter into WORD
+paramtoword
+  phx
+  ldx #1
+copychar
+  lda INPUT,y
+  beq doneword
+  cmp #32
+  beq doneword
+  sta WORD,x
+  iny
+  inx
+  bra copychar
+doneword
+  dex
+  stx WORD          ; character count  
+  plx
+  rts
 
 #endif
 
