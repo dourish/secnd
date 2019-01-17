@@ -36,7 +36,8 @@
 ;;;      elements available to Forth, performance improvements
 ;;; v07  SD card integration, block/buffer implementation, editor
 ;;; v08  string routines, cleanup, interpreter work, create/does>
-;;; v09  ROMmable version, reconfigured text input, expanded FAT16 code
+;;; v09  ROMmable version, reconfigured text input, expanded FAT16 code,
+;;;      disk manager
 ;;;
 
 #ifdef ROM
@@ -1177,43 +1178,43 @@ d121link
 d121code
   .word domount
 
-d122entry
-  .byte 4
-  .byte "fat@"
-d122link
-  .word d121entry
-d122code
-  .word dofatat
+;d122entry
+;  .byte 4
+;  .byte "fat@"
+;d122link
+;  .word d121entry
+;d122code
+;  .word dofatat
 
-d123entry
-  .byte 4
-  .byte "fat!"
-d123link
-  .word d122entry
-d123code
-  .word dofatset
+;d123entry
+;  .byte 4
+;  .byte "fat!"
+;d123link
+;  .word d122entry
+;d123code
+;  .word dofatset
 
-d124entry
-  .byte 7
-  .byte "freefat"
-d124link
-  .word d123entry
-d124code
-  .word dofreefat
+;d124entry
+;  .byte 7
+;  .byte "freefat"
+;d124link
+;  .word d123entry
+;d124code
+;  .word dofreefat
 
-d125entry
-  .byte 7
-  .byte "freedir"
-d125link
-  .word d124entry
-d125code
-  .word dofreedir
+;d125entry
+;  .byte 7
+;  .byte "freedir"
+;d125link
+;  .word d124entry
+;d125code
+;  .word dofreedir
 
 d126entry
   .byte 6
   .byte "mkfile"
 d126link
-  .word d125entry
+  .word d121entry
 d126code
   .word domkfile
 
@@ -1225,19 +1226,19 @@ d127link
 d127code
   .word dorename
 
-d128entry
-  .byte 7
-  .byte "cltofat"
-d128link
-  .word d127entry
-d128code
-  .word docltofat
+;d128entry
+;  .byte 7
+;  .byte "cltofat"
+;d128link
+;  .word d127entry
+;d128code
+;  .word docltofat
 
 d129entry
   .byte 9
   .byte "loadblock"
 d129link
-  .word d128entry
+  .word d127entry
 loadblockcode
 d129code
   .word doloadblock
@@ -1763,9 +1764,26 @@ dummyexit
 ;;; the stack and the major variables.
 ;;;
 coldstart
+
+#ifdef ROM
+  ;; initialize ACIA
+  lda #%00001011                ;No parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+#endif
+
+  ;; initialize the 6522 for the SD routines
+  jsr setup6522
+
   ;; initialize stack...
   jsr initstack
 
+#ifdef DISKMAN
+  jmp startdiskman
+#endif
+
+midway
   ;; initialize variables...
 
   ;; IP is the Forth instruction pointer
@@ -1811,9 +1829,6 @@ coldstart
   lda #>FIRST
   sta USE+1
   jsr zerobuffers
-
-  ;; initialize the 6522 for the SD routines
-  jsr setup6522
 
   ;; mark USEBASE as invalid
   lda #$ff
@@ -7271,6 +7286,7 @@ returnm1
 ;;;   CLK is PB0, ie 1
 ;;;   MOSI is PB1, ie 2
 ;;;   CS is PB2, ie 4
+;;;   CD is PB6, ie 64 (CD = card detect)
 ;;;   MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
 ;;; MISO, MOSI, and CS all have pull-up resisters, so they are high in
 ;;; the idle/unused state, except when pulled low by active circuitry.
@@ -7301,6 +7317,10 @@ setup6522
 ;;; it from other places too.)
 domount
 .(
+  bit VIA_PORTB
+  bvs continue
+  jmp abortnodisk
+continue
   jsr mountsub
   beq done
   jmp abortcardfail
@@ -7419,6 +7439,15 @@ abortdiskerror
   ;; invalidate the sector number cache
   lda #$ff
   sta CURSEC+3
+  jmp abort
+
+;;; ABORT with a "no disk" error
+abortnodisk
+  lda #<nodiskmsg
+  sta PRINTVEC
+  lda #>nodiskmsg
+  sta PRINTVEC+1
+  jsr printvecstr
   jmp abort
 
 ;;; ABORT with a file error
@@ -7806,21 +7835,29 @@ sdloadnext
 
 
 ;;; save standard I/O buffer to sector identified by a double on
-;;; the stack
+;;; the stack. this should really put things on the stack, but instead
+;;; we save time to putting it directly into the parameter space.
 sdsavebuf
-  dex
-  dex
+  lda stackbase+1,x
+  sta CURSEC
+  lda stackbase+2,x
+  sta CURSEC+1
+  lda stackbase+3,x
+  sta CURSEC+2
+  lda stackbase+4,x
+  sta CURSEC+3
+
   lda #<LBLOCK
-  sta stackbase+1,x
+  sta SCRATCH+8
   lda #>LBLOCK
-  sta stackbase+2,x
-  jmp sdsavefrommem
+  sta SCRATCH+9
+
+  bra startsave
 
 ;;; Save to block specified by double on the stack, translating between
 ;;; number formats. Takes address from stack to identify memory to
 ;;; save
 sdsavefrommem
-.(
   ;; take memory address and put in in SCRATCH+8/9, where sendblocks8
   ;; will find it
   lda stackbase+1,x
@@ -7830,6 +7867,8 @@ sdsavefrommem
   inx
   inx
 
+startsave
+.(
   jsr sendff
 
   ;; set cs to 0
@@ -8049,21 +8088,25 @@ sdloadroot
 ;;; List files from the root directory
 ;;;
 dodir
+.(
+  clc
+  jsr dirsub
+  bcs error
+  jmp next
+error
+  jmp abortdiskerror
+.)
+
+;;; this is structured as a subroutine so that we can also make it
+;;; available to the disk manager. that means that errors should be
+;;; returned as a flag rather than aborting directly.
+dirsub
   ;; BUG should check that there's a disk mounted and present
   ;; load the root directory -- just hardcoding location for now
   ;; BUG calculate this properly
   jsr sdloadroot
-;  stz stackaccess
-;  stz stackaccess+1
-;  jsr push16
-;  lda #2            ; block 513 = 2 in MSB and 1 in LSB
-;  sta stackaccess+1
-;  lda #1
-;  sta stackaccess
-;  jsr push16
-;  jsr sdloadblock
   bcc header
-  jmp abortdiskerror
+  rts               ; otherwise, return with carry flag set
 
 header
   jsr crlf
@@ -8177,15 +8220,15 @@ done
   cmp #>IOSENTINEL
   bne endnext       ; still fine, continue
   jsr sdloadnext
-  bra nextdirblock
+  bcc nextdirblock
+  rts               ; otherwise return with carry set
 endnext
 .)
   bra printdirent
 
 endofdir
   jsr crlf
-
-  jmp next
+  rts
 
 
 ;; NOTE this uses SCRATCH+4,5,12,13,14,15 (still true?)
@@ -8578,46 +8621,46 @@ cltofat
 
 
 ;;; TEMPORARY FOR TESTING
-docltofat
-  jsr cltofat
-  jmp next
+;docltofat
+;  jsr cltofat
+;  jmp next
 
-dofatat
-  jsr fatatsub
-  jmp next
+;dofatat
+;  jsr fatatsub
+;  jmp next
 
-fatatsub
-  jsr cltofat
-  lda stackbase+2,x
-  pha
-  lda stackbase+1,x
-  pha
-  inx
-  inx
-  jsr sdloadbuf
-  dex
-  dex
-  clc
-  pla
-  adc #<LBLOCK
-  sta stackbase+1,x
-  pla
-  adc #>LBLOCK
-  sta stackbase+2,x
-  jsr pop16
-  dex
-  dex
-  ldy #1
-  lda (stackaccess)
-  sta stackbase+1,x
-  lda (stackaccess),y
-  sta stackbase+2,x
-  rts
+;fatatsub
+;  jsr cltofat
+;  lda stackbase+2,x
+;  pha
+;  lda stackbase+1,x
+;  pha
+;  inx
+;  inx
+;  jsr sdloadbuf
+;  dex
+;  dex
+;  clc
+;  pla
+;  adc #<LBLOCK
+;  sta stackbase+1,x
+;  pla
+;  adc #>LBLOCK
+;  sta stackbase+2,x
+;  jsr pop16
+;  dex
+;  dex
+;  ldy #1
+;  lda (stackaccess)
+;  sta stackbase+1,x
+;  lda (stackaccess),y
+;  sta stackbase+2,x
+;  rts
 
   
-dofatset
-  jsr fatsetsub
-  jmp next
+;dofatset
+;  jsr fatsetsub
+;  jmp next
 
 ;;; stack is a value and a cluster number; saves the value at the
 ;;; right point in the FAT. There are two copies of the FAT, so
@@ -8900,9 +8943,9 @@ endofdirectory
 
 
 ;;; TMP TESTING ONLY
-dofreedir
-  jsr findfreedir
-  jmp next
+;dofreedir
+;  jsr findfreedir
+;  jmp next
 
 ;;; find a free directory entry. returns cluster and offset.
 findfreedir
@@ -9196,7 +9239,7 @@ continue
   ;; at this point, stack should have sector number and pointer,
   ;; and the sector should be loaded in the I/O buffer.
   jsr readnext      ; get destination filename
-  jsr mkcanon       ; canonicalize
+  ; jsr mkcanon       ; canonicalize (not needed, lookupdir will do it)
 
   ;; make sure that the destination file does NOT exist
 .(
@@ -9220,10 +9263,10 @@ continue
 
 .)
 
-  clc
   jsr copypadname   ; copy name from pad to address on stack
   inx               ; drop that pointer from the stack
   inx
+  clc
   jsr sdsavebuf     ; write back the directory data
   bcs abortgenericsub
 
@@ -9701,6 +9744,17 @@ flushbuf
   adc #0
   sta stackbase+4,x
 
+  ;; going to need this twice, so make a second copy
+  jsr open2cells
+  lda stackbase+5,x
+  sta stackbase+1,x
+  lda stackbase+6,x
+  sta stackbase+2,x
+  lda stackbase+7,x
+  sta stackbase+3,x
+  lda stackbase+8,x
+  sta stackbase+4,x
+
   ;; copy from buffer to I/O space
 
   clc               ; source pointer is buffer address plus two
@@ -9711,59 +9765,95 @@ flushbuf
   adc #0
   sta SCRATCH+3
 
-  ;; copy first 256 bytes
-.(
-  ldy #0
-copyloop
-  lda (SCRATCH+2),y
-  sta LBLOCK,y
-  iny
-  bne copyloop
-.)
+  dex
+  dex
+  lda SCRATCH+2
+  sta stackbase+1,x
+  lda SCRATCH+3
+  sta stackbase+2,x
 
-  inc SCRATCH+3     ; move forward by 256 bytes
+  jsr sdsavefrommem
+  ;; BUG NOT CHECKING ERRORS
 
-  ;; copy second 256 bytes
-.(
-  ldy #0
-copyloop
-  lda (SCRATCH+2),y
-  sta HBLOCK,y
-  iny
-  bne copyloop
-.)
+;  ;; copy first 256 bytes
+;.(
+;  ldy #0
+;copyloop
+;  lda (SCRATCH+2),y
+;  sta LBLOCK,y
+;  iny
+;  bne copyloop
+;.)
+;
+;  inc SCRATCH+3     ; move forward by 256 bytes
+;
+;  ;; copy second 256 bytes
+;.(
+;  ldy #0
+;copyloop
+;  lda (SCRATCH+2),y
+;  sta HBLOCK,y
+;  iny
+;  bne copyloop
+;.)
+;
+;  ;; write first sector. removes address from the stack.
+;  jsr sdsavebuf
+;  bcs endflush
+;
 
-  ;; write first sector. removes address from the stack.
-  jsr sdsavebuf
-  bcs endflush
+  ;; add one to the sector number on the stack
+  clc
+  lda stackbase+1,x
+  adc #1
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
 
-  ;; copy data for second sector from buffer to I/O space
-  inc SCRATCH+3     ; first, bump the source pointer
+  ;; put next base address on the stack
+  dex
+  dex
+  clc
+  lda SCRATCH+2
+  sta stackbase+1,x
+  lda SCRATCH+3
+  adc #2            ; 512 bytes after previous
+  sta stackbase+2,x
 
-  ;; copy first 256 bytes
-.(
-  ldy #0
-copyloop
-  lda (SCRATCH+2),y
-  sta LBLOCK,y
-  iny
-  bne copyloop
-.)
+;  ;; copy data for second sector from buffer to I/O space
+;  inc SCRATCH+3     ; first, bump the source pointer
+;
+;  ;; copy first 256 bytes
+;.(
+;  ldy #0
+;copyloop
+;  lda (SCRATCH+2),y
+;  sta LBLOCK,y
+;  iny
+;  bne copyloop
+;.)
+;
+;  inc SCRATCH+3     ; move forward by 256 bytes
+;
+;  ;; copy second 256 bytes
+;.(
+;  ldy #0
+;copyloop
+;  lda (SCRATCH+2),y
+;  sta HBLOCK,y
+;  iny
+;  bne copyloop
+;.)
+;
+;  ;; write second sector
+;  jsr sdsavenext
 
-  inc SCRATCH+3     ; move forward by 256 bytes
-
-  ;; copy second 256 bytes
-.(
-  ldy #0
-copyloop
-  lda (SCRATCH+2),y
-  sta HBLOCK,y
-  iny
-  bne copyloop
-.)
-
-  ;; write second sector
-  jsr sdsavenext
+  jsr sdsavefrommem
+  ;; BUG NOT CHECKING ERRORS
 
 endflush
   rts
@@ -11855,6 +11945,175 @@ putax
   rts
 
 
+#ifdef DISKMAN
+;;;
+;;; *** DISK MANAGER
+;;;
+;;; This is a basic command line for when we start up in ROM. Instead
+;;; of jumping directly to FORTH, we start off with a simple interaction
+;;; loop that allows looking at disks and running programs.
+;;;
+;;; The disk manager offers a few basic disk utilities, an entry
+;;; point to FORTH, and a load/run mechanism for executables. It
+;;; isn't structured as a FORTH program, but it largely relies on
+;;; FORTH run-time routines.
+;;;
+
+dmgreet    .byte "6502 Mite SD Disk Manager", $00
+
+dmtable
+  .word table1
+  .byte "mount", $00
+  .word mountsub
+table1
+  .word table2
+  .byte "dir", $00
+  .word dirsub
+table2
+  .word table3
+  .byte "show", $00
+  .word dmshow
+table3
+  .word table4
+  .byte "xreceive", $00
+  .word dmxrecv
+table4
+  .word table5
+  .byte "go", $00
+  .word dmgo
+table5
+  .word $0000       ; signals last entry in table
+  .byte "forth", $00
+  .word midway
+
+
+startdiskman
+.(
+  lda #<dmgreet
+  sta PRINTVEC
+  lda #>dmgreet
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+
+  ;; if there's an SD card present, mount it
+  bit VIA_PORTB
+  bvc cmdloop
+  jsr mountsub
+
+cmdloop
+  lda #"=
+  jsr puta
+  jsr readtermline
+  jsr crlf
+
+startmatch
+  lda #<dmtable
+  sta SCRATCH
+  lda #>dmtable
+  sta SCRATCH+1
+
+matchloop
+  ldy #1
+  lda (SCRATCH)     ; copy pointer to next entry
+  sta SCRATCH+2
+  lda (SCRATCH),y
+  sta SCRATCH+3
+
+  clc
+  lda SCRATCH
+  adc #2
+  sta SCRATCH
+  bcc skip1
+  inc SCRATCH+1
+skip1
+
+  ldy #0
+charloop
+  lda INPUT,y
+  beq lastchar
+  cmp #32
+  beq lastchar
+  cmp (SCRATCH),y
+  bne matchfail
+  iny
+  bra charloop
+lastchar
+  lda (SCRATCH),y
+  bne matchfail
+success
+  iny               ; add one to skip trailing NUL
+  clc
+  tya
+  adc SCRATCH
+  sta SCRATCH
+  bcc skip2
+  inc SCRATCH+1
+skip2
+  ldy #1
+  lda (SCRATCH)
+  sta SCRATCH+11
+  lda (SCRATCH),y
+  sta SCRATCH+12
+  ;; do the jsr
+  jsr indjsr
+  bra cmdloop
+matchfail
+  lda SCRATCH+2
+  bne nextcmd
+  lda SCRATCH+3
+  beq endoftable
+nextcmd
+  ldy #1  
+  lda SCRATCH+2
+  sta SCRATCH
+  lda SCRATCH+3
+  sta SCRATCH+1
+  bra matchloop
+
+endoftable
+  lda #"?
+  jsr puta
+  jsr crlf
+  bra cmdloop
+.)
+
+indjsr
+  jmp ($001B)
+
+;fakeloop
+;  lda #"=
+;  jsr puta
+;  jsr readtermline
+;  jsr crlf
+;
+;  lda INPUT
+;  cmp #"f
+;  bne cmdloop1
+;  jsr midway
+;  bra cmdloop
+;cmdloop1
+;  cmp #"d
+;  bne cmdloopn
+;  jsr dirsub
+;  bra cmdloop
+;cmdloopn
+;  lda #"?
+;  jsr puta
+;  jsr crlf
+;  bra cmdloop
+
+
+dmshow
+  rts
+dmxrecv
+  rts
+dmgo
+  rts
+
+
+#endif
+
 
 
 ;;;
@@ -11863,7 +12122,7 @@ putax
 
 
 #ifdef ROM
-greeting	 .byte "SECND 6502 Forth v09-ROM", $00
+greeting	 .byte "SECND 6502 Forth v09", $00
 #else
 greeting	 .byte "SECND 6502 Forth v09-RAM", $00
 #endif
@@ -11880,6 +12139,7 @@ cardfailmsg:     .byte " couldn't initialize card", $00
 initializedmsg:  .byte " initialized ", $00
 usingerrormsg:   .byte " not USING block file", $00
 diskerrormsg:    .byte " disk error", $00
+nodiskmsg:       .byte " no disk present", $00
 ;readerrormsg:    .byte " read error", $0d, $0a, $00
 ;writeerrormsg:   .byte " write error", $0d, $0a, $00
 dirofmsg:        .byte "Directory of ", $00
