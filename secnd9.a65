@@ -11331,12 +11331,12 @@ readsign
   ldy #0            ; y indexes digits of the input string
 
   ;; first, check if the first character is a minus
-  stz SCRATCH       ; by default, a positive number
+  stz SCRATCH       ; default to positive number
   lda (stackaccess),y
   cmp #$2d
-  bne checkbase     ; it is not, so proceed as usual
-  inc SCRATCH       ; set a flag; we'll process this later
-  iny
+  bne checkbase     ; no minus, so proceed as usual
+  inc SCRATCH       ; negative, so flag for later
+  iny               ; skip that character
 
 checkbase
   lda BASE          ; check if we're reading hexadecimal
@@ -11983,12 +11983,16 @@ table2
 table3
   .word table4
   .byte "xreceive", $00
-  .word dmxrecv
+  .word dmxr
 table4
   .word table5
   .byte "go", $00
   .word dmgo
 table5
+  .word table6
+  .byte "help", $00
+  .word dmhelp
+table6
   .word $0000       ; signals last entry in table
   .byte "forth", $00
   .word midway
@@ -12006,7 +12010,13 @@ startdiskman
   ;; if there's an SD card present, mount it
   bit VIA_PORTB
   bvc cmdloop
+  lda #"S
+  jsr puta
+  lda #"D
+  jsr puta
   jsr mountsub
+  jsr crlf
+
 
 cmdloop
   lda #"=
@@ -12090,44 +12100,46 @@ endoftable
 indjsr
   jmp (SCRATCH+11)
 
+
 dmshow
   jsr paramtoword
-;  jmp showsub
-  rts
+  jmp showsub       ; doing the jump saves us an RTS
 
-dmxrecv
-  rts
+
+dmhelp
+  lda #<dmhelpstr
+  sta PRINTVEC
+  lda #>dmhelpstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jmp crlf          ; doing the jump saves us an RTS
+
+dmhelpstr .byte "mount, dir, show <file>, xreceive <addr>, go <addr>, forth, help", $00
+
 
 dmgo
   jsr paramtoword
-go1
-  lda #0
-  ldy WORD
-  iny
-  sta WORD,y
-  clc
-  lda #<WORD
-  adc #1
-  sta stackaccess
-  lda #>WORD
-  adc #0
-  sta stackaccess+1
-  jsr push16
-  jsr readsign
+  jsr wordtonum     ; leaves result on stack
 go2
-  ;; double it -- just for testing
-  clc
-  asl stackbase+1,x
-  rol stackbase+2,x
-  jsr print16s
-  jsr crlf
-;  jsr pop16
-;  lda stackaccess
-;  sta SCRATCH+11
-;  lda stackaccess+1
-;  sta SCRATCH+12
-;  jsr indjsr
-  rts
+  jsr pop16
+  lda stackaccess
+  sta SCRATCH+11
+  lda stackaccess+1
+  sta SCRATCH+12
+  jmp indjsr        ; doing the jump saves us an RTS
+
+
+XDESTADDR   = $0034 ; and $0035
+
+dmxr
+  jsr paramtoword
+  jsr wordtonum
+  jsr pop16
+  lda stackaccess
+  sta XDESTADDR
+  lda stackaccess+1
+  sta XDESTADDR+1
+  jmp xmodemrecv
 
 
 ;;; copy the parameter into WORD
@@ -12148,6 +12160,248 @@ doneword
   stx WORD          ; character count  
   plx
   rts
+
+;;; convert string in WORD to a number on the stack
+wordtonum
+  lda #0
+  ldy WORD
+  iny
+  sta WORD,y
+  clc
+  lda #<WORD
+  adc #1
+  sta stackaccess
+  lda #>WORD
+  adc #0
+  sta stackaccess+1
+  jsr push16
+  stz SCRATCH
+  jsr readsign
+  rts
+
+
+;;;
+;;; XMODEM RECEIVE CODE
+;;;
+;;; RAM-based FORTH depends on the monitor for this, but for
+;;; ROM-based and the disk manager, we incorporate it here.
+;;;
+
+XBLOCKNO    = $0030
+XBLOCKINV   = $0031
+XBLOCKCOUNT = $0032
+XCHKSUM     = $0033
+;XDESTADDR   = $0034 ; and $0035
+BUFFER      = $0036 ; and $0037
+
+
+;; entry point
+;;
+xmodemrecv
+  ;; first, print a message announcing that we're listening
+  lda #<startstr
+  sta PRINTVEC
+  lda #>startstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+
+.(
+  phx               ; preserve operand stack pointer
+
+  stz XBLOCKCOUNT
+  ldy #$0
+  ldx #0
+
+  ;; okay, now we wait for transmission to start. the deal here is that
+  ;; we are meant to listen with 10-second timeouts, and sent a NACK
+  ;; every ten seconds, one of which will signal to the other end that
+  ;; we are ready to go. However, we don't have a timer set up anywhere.
+  ;; so I'm going to cheat -- we will basically listen for 256x256 loops,
+  ;; and send an ACK after that. it will actually just be a second or two.
+waitstart
+  ldy #$0
+  ldx #$0
+.(
+wait_rxd_full    
+  inx               ; counting up to 256
+  beq bumpy         ; count cycled, so increment Y
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+  jmp gotfirstchar
+bumpy
+  iny               ; counting up to 256
+  beq sendnack      ; Y has cycled, so we've looped 256*256 times
+  bra wait_rxd_full  
+sendnack
+  ;; send a nack
+  lda #$15
+  jsr puta
+  bra wait_rxd_full
+.)
+gotfirstchar
+  ldx #$0           ; reset X and Y
+  ldy #$0
+
+nextxblock
+;; check header data and block number
+processbuffer
+  jsr getserial     ; get first character (if we don't already have it)
+  cmp #$04          ; end-of-transmission?
+  beq endoftransmission
+  cmp #$01          ; start-of-header?
+  beq processblock
+  jsr headererror
+  jmp xmerror
+
+processblock
+  ;; get block number and inverse block number
+  jsr getserial
+  sta XBLOCKNO
+  jsr getserial
+  sta XBLOCKINV
+  sec
+  lda #255
+  sbc XBLOCKNO
+  cmp XBLOCKINV     ; does block number match inverse block number?
+  beq checkblockcount
+  jsr blockcounterror
+  jmp xmerror
+
+checkblockcount
+  inc XBLOCKCOUNT
+  lda XBLOCKCOUNT
+  cmp XBLOCKNO      ; does it match what we were expecting?
+  beq processdata
+  jsr blockcounterror
+  jmp xmerror
+
+processdata
+  stz XCHKSUM
+  ldy #0
+nextbyte
+  jsr getserial
+  sta (XDESTADDR),y
+  clc
+  adc XCHKSUM
+  sta XCHKSUM
+  iny
+  cpy #$80
+  bne nextbyte
+endofblock
+  jsr getserial
+  cmp XCHKSUM
+  beq checksumok
+  jsr putax
+  lda XCHKSUM
+  jsr putax
+  jsr checksumerror
+  jmp xmerror
+checksumok
+  ;; send an ACK
+  lda #$06
+  jsr puta
+
+  ;; update the destination address by 128 ($80)
+  lda #$80
+  clc
+  adc XDESTADDR
+  sta XDESTADDR
+  lda XDESTADDR+1
+  adc #0
+  sta XDESTADDR+1
+  ;; and loop for next block
+
+  bra nextxblock
+
+;; Send an ACK. Pause briefly to allow the connection to be torn down.
+;; Then print a message to signal successful completion.
+endoftransmission
+  ;; send an ACK
+  lda #$06
+  jsr puta
+
+.(
+  ;; this is just to generate a pause. entirely arbitrary.
+  ;; (had to make this longer after i upped the clock speed)
+  ;; i've seen other code flush the buffer and just wait until there's
+  ;; been no new transmission for a period of a second or so. that might
+  ;; work better...
+  ;;
+  lda #$30
+fullloop
+  ldy #$0
+busywait
+  iny
+  bne busywait
+  dec
+  bne fullloop
+.)  
+
+  jsr crlf
+  lda #<recvdstr
+  sta PRINTVEC
+  lda #>recvdstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+  jmp endxmodem
+
+xmerror
+
+endxmodem
+  plx               ; restore operand stack pointer in x
+  rts
+.)
+
+
+;; get a character from the serial port
+;;
+getserial
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  rts
+
+
+checksumerror
+  lda #<chksmerrstr
+  sta PRINTVEC
+  lda #>chksmerrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+  rts
+
+headererror
+  lda #<headerrstr
+  sta PRINTVEC
+  lda #>headerrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+  rts
+
+blockcounterror
+  lda #<blockerrstr
+  sta PRINTVEC
+  lda #>blockerrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+  jsr crlf
+  rts
+
+startstr:   .byte "xmodem listening", $00
+recvdstr:   .byte "xmodem received", $00
+blockerrstr:.byte "block count error", $00
+chksmerrstr:.byte "checksum errror", $00
+headerrstr: .byte "header error", $00
+
 
 #endif
 
