@@ -4563,19 +4563,29 @@ continue
 
 ;;; backslash -- ignore the rest of the line
 dobackslsh
-  ;; BUG FIX THIS LATER -- NO LONGER WORKS! MOST LIKELY WON'T WORK
-  ;; WITH STREAMING FILES WHERE \0 IS NOT NECESSARILY LINE-ALIGNED?
 .(
   ldy #0
 nextchar
   lda (IPTR),y
-  beq endofline
+  beq gotzero
   cmp #$0A
   beq endofline
   cmp #$0D
   beq endofline
   iny
   bra nextchar
+gotzero
+  ;; if we are reading from terminal or from a buffer, then
+  ;; this means the end of the comment. if we are reading from
+  ;; a stream, it's more complicated.
+  bit SOURCE
+  bpl endofline     ; terminal or buffer
+  jsr refill
+  ;; now test if we are STILL reading from a file (ie didn't hit EOF).
+  ;; if so, continue looking for end of line; if not, jump to the end
+  bit SOURCE
+  bpl skip
+  bra dobackslsh
 endofline
   clc
   tya
