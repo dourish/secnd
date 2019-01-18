@@ -3203,10 +3203,8 @@ discardcomment
 continue
   jsr readnext
 
-  lda WORD
-  cmp #$01
-  bne continue
-  lda WORD+1
+  ldy WORD          ; get character count
+  lda WORD,y        ; get last character
   cmp #$29          ; 0x29 is closing parenthesis
   bne continue
 
@@ -4600,7 +4598,7 @@ skip
 
 ;;; do comment. this is called as an immediate word. it basically
 ;;; skips ahead in the input buffer until it reads a word that is
-;;; a singular closing parenthesis by itself.
+;;; terminated by a closing parenthesis.
 docomment
   jsr discardcomment
   jmp next
