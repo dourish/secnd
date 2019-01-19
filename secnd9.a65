@@ -1179,12 +1179,12 @@ d121code
   .word domount
 
 ;d122entry
-;  .byte 4
-;  .byte "fat@"
+;  .byte 8
+;  .byte "loadfile"
 ;d122link
 ;  .word d121entry
 ;d122code
-;  .word dofatat
+;  .word doloadfile
 
 ;d123entry
 ;  .byte 4
@@ -7769,6 +7769,7 @@ skipload
 ;;; Load block specified by double on the stack (translating between
 ;;; number formats). Places data at a memory block signalled on
 ;;; the stack
+;;; ( sector address -- )
 sdloadtomem
 .(
   ;; take memory target address off the stack and place it into
@@ -8391,6 +8392,192 @@ nextblock
 endshow
   jsr crlf
   rts
+
+;doloadfile
+;  jsr readnext
+;  jsr loadfilesub
+;  jmp next
+
+;;; load a file into a designated block of memory. on entry,
+;;; WORD contains the filename and stack has the destination address.
+loadfilesub
+.(
+  ;; take the destination address off the stack and stash it
+  lda stackbase+1,x
+  pha
+  lda stackbase+2,x
+  pha
+  inx
+  inx
+
+  jsr lookupdir
+
+.(
+  bcc continue
+  pla
+  pla
+  rts               ; return with carry set to signal failure
+continue
+.)
+  ;; grab pointer to the data
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+
+  ;; remove pointer from the stack
+  inx
+  inx
+
+  ;; grab the file size and stash it as the "still to read" count
+  ldy #28
+  lda (SCRATCH),y
+  sta SCRATCH+2
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+3
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+4
+  iny
+  lda (SCRATCH),y
+  sta SCRATCH+5
+
+  ;; next, grab the file cluster number and push onto stack as a double.
+  ;; we put this on top of the directory cluster number that's there
+  ;; because we don't need it
+  ldy #26
+  lda (SCRATCH),y ; LSB
+  sta stackbase+1,x
+  iny
+  lda (SCRATCH),y ; MSB
+  sta stackbase+2,x
+  stz stackbase+3,x
+  stz stackbase+4,x
+
+  ;; turn cluster number into block number
+  jsr cltosector
+
+  ;; make a note of the sector number, leaving it on the stack
+  lda stackbase+1,x
+  sta SCRATCH+10
+  lda stackbase+2,x
+  sta SCRATCH+11
+  lda stackbase+3,x
+  sta SCRATCH+12
+  lda stackbase+4,x
+  sta SCRATCH+13
+
+  ;; retreive and store destination address, add to stack
+  dex
+  dex
+  pla
+  sta SCRATCH+7
+  sta stackbase+2,x
+  pla
+  sta SCRATCH+6
+  sta stackbase+1,x
+
+nextsector
+  ;; is there less then 512 types left to read?
+  ;; we ignore upper two bytes of length (file limit is 32K) so
+  ;; just look at whether second byte is 0 or 1.
+  lda SCRATCH+3
+  beq lastsector
+  cmp #01
+  beq lastsector
+
+  jsr sdloadtomem
+
+  ;; subtract 512 from the count of data to read
+  sec
+  lda SCRATCH+3
+  sbc #2
+  sta SCRATCH+3
+  lda SCRATCH+4     ; +4 and +5 perhaps not needed?
+  sbc #0
+  sta SCRATCH+4
+  lda SCRATCH+5
+  sbc #0
+  sta SCRATCH+5
+
+  ;; add one to the sector count and add it to the stack
+  jsr open2cells
+  clc
+  lda SCRATCH+10
+  adc #1
+  sta SCRATCH+10
+  sta stackbase+1,x
+  lda SCRATCH+11
+  adc #0
+  sta SCRATCH+11
+  sta stackbase+2,x
+  lda SCRATCH+12
+  adc #0
+  sta SCRATCH+12
+  sta stackbase+3,x
+  lda SCRATCH+13
+  adc #0
+  sta SCRATCH+13
+  sta stackbase+4,x
+
+  ;; add 512 to the data pointer
+  clc
+  lda SCRATCH+7
+  adc #2
+  sta SCRATCH+7
+
+  ;; put it on the stack for the next read
+  dex
+  dex
+  lda SCRATCH+6
+  sta stackbase+1,x
+  lda SCRATCH+7
+  sta stackbase+2,x
+
+  bra nextsector
+
+lastsector
+
+  ;; the last sector -- laod the block into the default buffer
+  ;; and copy as much as we need.
+  inx               ; drop memory pointer from the stack
+  inx  
+  jsr sdloadbuf     ; fill the buffer
+  lda #<LBLOCK
+  sta SCRATCH
+  lda #>LBLOCK
+  sta SCRATCH+1
+  lda SCRATCH+3     ; more than 256 characters to copy?
+  beq last256       ; no
+  ldy #0            ; yes. copy 256 to destination
+loop1
+  lda (SCRATCH),y
+  sta (SCRATCH+6),y
+  iny
+  bne loop1
+  inc SCRATCH+1     ; bump pointer to useful data
+  inc SCRATCH+7
+last256
+  lda SCRATCH+2     ; all done?
+  beq done
+  tya
+loop2
+  dey
+  lda (SCRATCH),y
+  sta (SCRATCH+6),y
+  cpy #0
+  bne loop2
+done
+  clc
+.)
+  rts
+
+
+  
+
+
+
 
 
 ;;; USING specifies the block file from which subsequent block
@@ -11957,6 +12144,37 @@ endstr
 ;;; this is just here because the stack code needs it... should
 ;;; reoganize my files...
 putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
   rts
 
 
@@ -12008,6 +12226,9 @@ table6
 
 startdiskman
 .(
+  jsr crlf
+  jsr crlf
+  jsr crlf
   lda #<dmgreet
   sta PRINTVEC
   lda #>dmgreet
@@ -12018,12 +12239,7 @@ startdiskman
   ;; if there's an SD card present, mount it
   bit VIA_PORTB
   bvc cmdloop
-  lda #"S
-  jsr puta
-  lda #"D
-  jsr puta
-  jsr mountsub
-  jsr crlf
+  jsr dmmount
 
 
 cmdloop
@@ -12099,14 +12315,62 @@ nextcmd
   bra matchloop
 
 endoftable
+  ;; see if I can find a file to execute
+  ;; first, copy into WORD, appending ".x65"
+  ldy #0
+copychar
+  lda INPUT,y
+  beq endword
+  cmp #32
+  beq endword
+  iny
+  sta WORD,y
+  bra copychar
+endword
+  iny
+  lda #".
+  sta WORD,y
+  iny
+  lda #"x
+  sta WORD,y
+  iny
+  lda #"6
+  sta WORD,y
+  iny
+  lda #"5
+  sta WORD,y
+  sty WORD
+
+  ;; put load address $0300 on the stack
+  dex
+  dex
+  lda #3
+  sta stackbase+2,x
+  stz stackbase+1,x
+
+  clc
+  jsr loadfilesub
+  bcs error
+  jsr $0300         ; run the loaded code
+  jmp cmdloop
+
+error
   lda #"?
   jsr puta
   jsr crlf
-  bra cmdloop
+  jmp cmdloop
 .)
 
 indjsr
   jmp (SCRATCH+11)
+
+dmmount
+  lda #"S
+  jsr puta
+  lda #"D
+  jsr puta
+  jsr mountsub
+  jmp crlf          ; JMP saves an RTS
 
 
 dmshow
