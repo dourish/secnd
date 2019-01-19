@@ -6506,6 +6506,8 @@ return
 ;; WORD. Potentially refills the input. In the new model, IPTR
 ;; always points to the next character to be read, from whichever
 ;; input buffer we're using.
+;; BUG MAY FAIL TO PROCESS LAST CHARACTER/FIRST CHARACTER IN BUFFER
+;; PROPERLY ESPECIALLY IF DURING WORD/SPACE TRANSITION?
 readnext
   ldy #0
 lookforword
@@ -6531,7 +6533,7 @@ nextchar
   bra lookforword
 endofbuffer
   jsr refill
-  jmp readnext 
+  jmp readnext      ; so, presumes that we're still pre-word
 .)
 
 startword
@@ -6550,9 +6552,10 @@ skip
   stz WORD
   phx
   ldx #1
+  stx WORD          ; keep this updated in case of refill
 nextchar
   lda (IPTR),y
-  beq midword       ; got a null un the middle of a word
+  beq midword       ; got a null in the middle of a word
   cmp #$20
   beq doneword
   cmp #$09
@@ -6572,8 +6575,12 @@ midword
   ;; but only if we are streaming?
   lda SOURCE
   bpl doneword
+  plx               ; restore X to stack pointer
   jsr refill
-  jmp  nextchar
+  phx               ; save stack pointer again
+  ldx WORD          ; restore X as WORD offset
+  ldy #0            ; reset input pointer offset
+  jmp nextchar
 doneword
   clc               ; update IPTR past consumed input
   tya
@@ -12197,7 +12204,7 @@ dmgreet    .byte "6502 Mite SD Disk Manager", $00
 dmtable
   .word table1
   .byte "mount", $00
-  .word mountsub
+  .word dmmount
 table1
   .word table2
   .byte "dir", $00
