@@ -166,6 +166,12 @@ LIMIT=FIRST+BUFFERSPACE
 
   jmp coldstart     ; jump past code defined in stack routines
 
+#ifdef ROM
+  ;; jump table for use by RAM-resident programs
+  jmp printvecstr
+  jmp sdloadtomem
+#endif
+
 
 ;;; STACK.A65 has definitions for basic stack operations
 #include "../mitemon/stack.a65"
@@ -1113,19 +1119,19 @@ d113link
 d113code
   .word abort
 
-d114entry
-  .byte 6
-  .byte "upload"
-d114link
-  .word d113entry
-d114code
-  .word doupload
+;d114entry
+;  .byte 6
+;  .byte "upload"
+;d114link
+;  .word d113entry
+;d114code
+;  .word doupload
 
 d115entry
   .byte 6
   .byte "delete"
 d115link
-  .word d114entry
+  .word d113entry
 d115code
   .word dodelete
 
@@ -1153,20 +1159,20 @@ d118link
 d118code
   .word dotuck
 
-d119entry
-  .byte 4
-  .byte "dump"
-d119link
-  .word d118entry
-dumpcode
-d119code
-  .word dodump
+;d119entry
+;  .byte 4
+;  .byte "dump"
+;d119link
+;  .word d118entry
+;dumpcode
+;d119code
+;  .word dodump
 
 d120entry
   .byte 5
   .byte "count"
 d120link
-  .word d119entry
+  .word d118entry
 d120code
   .word docount
 
@@ -1178,13 +1184,13 @@ d121link
 d121code
   .word domount
 
-;d122entry
-;  .byte 8
-;  .byte "loadfile"
-;d122link
-;  .word d121entry
-;d122code
-;  .word doloadfile
+d122entry
+  .byte 3
+  .byte "u.r"
+d122link
+  .word d121entry
+d122code
+  .word dorprint16u
 
 ;d123entry
 ;  .byte 4
@@ -1214,7 +1220,7 @@ d126entry
   .byte 6
   .byte "mkfile"
 d126link
-  .word d121entry
+  .word d122entry
 d126code
   .word domkfile
 
@@ -2076,6 +2082,11 @@ douprint16
 dorprint16
   jsr swap16        ; pull number to be printed to the top
   jsr rprint16s
+  jmp next
+
+dorprint16u
+  jsr swap16
+  jsr rprint16u
   jmp next
 
 doprint32
@@ -3027,8 +3038,9 @@ continue
   jmp next          ; continue to the next instruction
 
 
-;;; This is the compiler behavior for ABORT". It compiles doabortqrt
-;;; and then jumps to the shared compile-string operation
+;;; This is the compiler behavior for ABORT". It compiles
+;;; doabortqrt and then jumps to the shared compile-string
+;;; operation
 doabortq
   ldy #1
   lda #<doabortqcode
@@ -3037,9 +3049,10 @@ doabortq
   sta (DP),y
   bra compilestr
 
-;;; When compiled, S" compiles dostrlit and an inline string constant.
-;;; When interpreted, it stashes the string in a temporary space and
-;;; leaves a pointer on the stack
+;;; When compiled, S" compiles dostrlit and an inline string
+;;; constant. When interpreted, it stashes the string in a 
+;;; temporary space and leaves a pointer on the stack. Strings
+;;; represented at the user level as caddr and u.
 dosquote
   lda STATUS
   bit #COMPILE
@@ -3095,6 +3108,7 @@ charloop
 interpsq
   jsr assemblestr   ; assemble string onto PAD
   ldy PAD           ; copy string length
+  phy               ; stash it for the moment
   sty TEMPSTR
 .(
 charloop            ; copy string contents (backwards from end)
@@ -3104,13 +3118,22 @@ charloop            ; copy string contents (backwards from end)
   bne charloop
 .)
 
-  ;; leave address on the stack
+  ;; leave address on the stack, adding one to skip the count byte
   dex
   dex
+  clc
   lda #<TEMPSTR
+  adc #1
   sta stackbase+1,x
   lda #>TEMPSTR
+  adc #0
   sta stackbase+2,x
+
+  ;; pull count and leave that on the stack
+  pla
+  sta stackaccess
+  stz stackaccess+1
+  jsr push16
 
   jmp next
 
@@ -3186,6 +3209,7 @@ skipmsb
   lda PADPTR+1
   sbc #0
   sta PADPTR+1
+  dec PAD           ; decrement count by one
 .)
 finished
   ;; add a null at the end of the string
@@ -4819,10 +4843,10 @@ done
 
 
 ;;; Call into the xmodem upload code from the monitor
-doupload
-  jsr crlf
-  jsr XRECV
-  jmp next
+;doupload
+;  jsr crlf
+;  jsr XRECV
+;  jmp next
 
 
 ;; switch input to a streaming file.
@@ -6576,9 +6600,10 @@ midword
   lda SOURCE
   bpl doneword
   plx               ; restore X to stack pointer
-  jsr refill
+  jsr refill        ; refill uses stack, hence phx/plx
   phx               ; save stack pointer again
-  ldx WORD          ; restore X as WORD offset
+  ldx WORD          ; restore X as WORD offset, but it's off by 1
+  inx               ; so increment to next charaacter
   ldy #0            ; reset input pointer offset
   jmp nextchar
 doneword
@@ -7870,9 +7895,9 @@ sdsavebuf
 
   bra startsave
 
-;;; Save to block specified by double on the stack, translating between
-;;; number formats. Takes address from stack to identify memory to
-;;; save
+;;; Save to block specified by double on the stack, translating
+;;; between number formats. Takes address from stack to identify
+;;; memory to save
 sdsavefrommem
   ;; take memory address and put in in SCRATCH+8/9, where sendblocks8
   ;; will find it
@@ -11853,6 +11878,13 @@ nominus
 rprint16s
   jsr initpadptr
   jsr handlesign16
+  bra sharedrprint16
+
+;;; Print a 16-bit number, right-aligned, but unsigned. Most of
+;;; the code is shared with rprint16s.
+rprint16u
+  jsr initpadptr
+sharedrprint16
   jsr assemble16    ; assemble a 16-bit number on the pad
   jsr pop16         ; pull the field width (presume < 256)
   phy
