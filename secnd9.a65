@@ -2393,24 +2393,45 @@ continue
 ;;; as string-plus-count so we need to convert (basically by adding
 ;;; one to the strong address)
 dostrlit
-  lda (IP)        ; load the string count
-  pha             ; cache it for the moment
+  jsr cslitsub    ; loads c-string address onto the stack
+  ;; leaves stackaccess pointing to the base address
 
+  ;; load the string length and push onto stack
+  dex
+  dex
+  lda (stackaccess) ; length byte
+  sta stackbase+1,x
+  stz stackbase+2,x ; always zero because strlen < 256
+
+  ;; increment string base address by 1 to skip length byte
+.(
   clc
+  lda stackbase+3,x
+  adc #1
+  sta stackbase+3,x
+  bcc skip
+  inc stackbase+4,x
+skip
+.)
+
+  jmp next         ; done
+
+
+;;; subroutine doing most of the work for cliteral and sliteral.
+;;; literal strings are always stored as counted strings. this
+;;; puts a literal string on the stack from IP, which is what
+;;; cliteral needs; sliteral will then take the count and turn
+;;; it into a new stack value
+cslitsub
+  ;; push address via stackaccess because we're going to use
+  ;; that later
   lda IP           ; IP points to the address of counted string
-  adc #1           ; so add one
   sta stackaccess  ; before store in stackaccess
   lda IP+1
-  adc #0
   sta stackaccess+1
   jsr push16       ; add to the data stack
   
-  pla              ; recover the length count
-  sta stackaccess
-  stz stackaccess+1 ; max 255 characters in a string
-  jsr push16
-
-  lda (IP)         ; load the count again
+  lda (IP)         ; load the count
   inc              ; add one to get number of bytes to skip
   clc              ; bump IP past the string constant
   adc IP
@@ -2419,7 +2440,8 @@ dostrlit
   adc #0
   sta IP+1
 
-  jmp next         ; done
+  rts
+
 
 ;;; dovaddr is the internal code for variables... look up the current
 ;;; XT and use it to find the address reserved for the variable, and
