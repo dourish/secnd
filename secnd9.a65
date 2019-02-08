@@ -87,7 +87,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; CODEVEC holds the location of the code for the next instruction
 ;;; DP holds pointer to the next available dictionary space
 ;;; DPTR is an internal variable for traversing the dictionary
-;;; STATUS is the system status flags (e.g. compilation flag)
+;;; STATE is the system status flags (e.g. compilation flag)
 ;;; CWORD holds a pointer to the word currently being compiled
 ;;; SOURCE indicates where input is coming from (0 for terminal)
 ;;; INPUT points to the input buffer
@@ -106,11 +106,10 @@ RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
 ; reserve 0056, 0057 (we need 0057 to store a JMP instruction)
 XT=$0058            ; and 0059
-;$005A is free
-;$005B is free
+STATE=$005A         ; and 005B (compiler flag)
 DPTR=$005C          ; and 005D (used for searching the dictionary)
 DP=$005E            ; and 005F (dictionary pointer i.e. HERE)
-STATUS=$0060        ; status word (compiler flag)
+; $0060 is free
 CWORD=$0061         ; and 0062 (word currently being compiled)
 PADPTR=$0063        ; and 0064 (pointer to text area)
 SOURCE=$0065        ; current input location
@@ -1671,14 +1670,22 @@ doabortqcode
 d181code
   .word doabortqrt
 
-dtop
 d182entry
   .byte 6
   .byte "latest"
 d182link
   .word d181entry
-d183code
+d182code
   .word dolatest
+
+dtop
+d183entry
+  .byte 5
+  .byte "state"
+d183link
+  .word d182entry
+d183code
+  .word dostate
 
 
 ;d101entry
@@ -1799,7 +1806,7 @@ midway
   lda #$6c          ; indirect jump instruction
   sta XT-1          ; to make NEXT work
 
-  stz STATUS        ; make sure compiler is off
+  stz STATE         ; make sure compiler is off
 
   ;; Initialize the return stack. I'm just putting that on page 2, 
   ;; growing downwards, until I have a better idea; I should probably
@@ -2779,9 +2786,8 @@ dofromr
 ;;;
 docolon
   ;; first, set the compiler flag
-  lda STATUS
-  ora #COMPILE
-  sta STATUS
+  lda #$FF
+  sta STATE
 
   lda DP            ; cache the address of the word we're now compiling
   sta CWORD         ; we wait until we're done (dosemic) before we update
@@ -2807,9 +2813,7 @@ docolon
 ;;;
 dosemic
   ;; turn off the compiler
-  lda STATUS
-  and #%11111110
-  sta STATUS
+  stz STATE
 
   ;; add call to exit at the end of the entry
   dex
@@ -2869,8 +2873,7 @@ done
 dodotqu
 .(
   ;; are we compiling?
-  lda STATUS
-  bit #COMPILE
+  lda STATE
   beq nocompile
 
   ;; Yes. compile it (case 1)
@@ -3004,8 +3007,7 @@ doabortq
 ;;; temporary space and leaves a pointer on the stack. Strings
 ;;; represented at the user level as caddr and u.
 dosquote
-  lda STATUS
-  bit #COMPILE
+  lda STATE
   beq interpsq
 
   ldy #1
@@ -3491,9 +3493,6 @@ continue
 ;;; to calculate the offset.
 dobegin
 .(
-;  lda STATUS
-;  bit #COMPILE
-;  beq nocompile
 
   ;; add the current instruction location to the stack
   lda DP
@@ -3652,9 +3651,6 @@ doparendo
 ;;; doloop is the compiler behavior for LOOP. It compiles (LOOP) and a
 ;;; branch address to the address left on the stack.
 doloop
-;  lda STATUS
-;  bit #COMPILE
-;  beq nodocompile
 
   lda #<parenloopcode
   sta (DP)
@@ -3758,9 +3754,6 @@ skipmsb
 ;;; into the LOOP code to do all the calculations of offsets, etc.
 doplusloop
 .(
-;  lda STATUS
-;  bit #COMPILE
-;  beq nocompile
 
   lda #<parplusloopcode
   sta (DP)
@@ -4396,9 +4389,6 @@ skipmsb
 ;;; being defined).
 dorecurse
 .(
-;  lda STATUS
-;  bit #COMPILE
-;  beq nocompile
 
   clc
   lda CWORD         ; put word address into SCRATCH
@@ -4572,7 +4562,7 @@ continue
 
   ;; now check -- are we compiling? If so, then compile a literal
   ;; with that value. If not, push it on the stack.
-  lda STATUS
+  lda STATE
   beq nocompile
 
   ;; compiling (note code shared with interpreter BUG COMBINE)
@@ -5844,11 +5834,12 @@ dodecimal
   jmp next
 
 dobase
+  dex
+  dex
   lda #<BASE
-  sta stackaccess
+  sta stackbase+1,x
   lda #>BASE
-  sta stackaccess+1
-  jsr push16
+  sta stackaccess+2
   jmp next
 
 dochar
@@ -5893,10 +5884,6 @@ dobrchar
 ;;; the code that was compiled after "DOES>".
 dodoes
 .(
-;  lda STATUS
-;  bit #COMPILE
-;  beq nocompile
-
   ldy #0
   lda #<dodoesrtcode  ; first, compile in the code address
   sta (DP),y
@@ -6097,6 +6084,16 @@ dolatest
   sta stackbase+2,x
   jmp next
 
+;;; implement STATE (leave address of STATE variable on stack)
+dostate
+  dex
+  dex
+  lda #<STATE
+  sta stackbase+1,x
+  lda #>STATE
+  sta stackbase+2,x
+  jmp next
+
 
 ;;;
 ;;; *** TEXT INTERPRETER
@@ -6116,9 +6113,7 @@ dolatest
 ;;; initiate interpreter interaction.
 warmstart
   ;; turn off the compiler
-  lda STATUS
-  and #%11111110
-  sta STATUS
+  stz STATE
 
   lda #$FF
   sta RP            ; reset return stack
@@ -6169,8 +6164,7 @@ done
 .)
 
   ;; next, check if we're compiling. if we are not, then we can continue
-  lda STATUS
-  bit #COMPILE
+  lda STATE
   beq nocompile
 
   ;; now check if the word is immediate... because if it is, we should
@@ -6210,8 +6204,7 @@ nocompile
   lda SCRATCH
   bit #CPO
   beq interp
-  lda STATUS
-  bit #COMPILE
+  lda STATE
   beq compileonly
 
 interp
@@ -6260,8 +6253,7 @@ done
 
   ;; if we are compiling, we need to take it off the stack again
   ;; and compile it into the word.
-  lda STATUS
-  bit #COMPILE
+  lda STATE
   beq normal
 
   ;; we are compiling. so we need to add this to the current
@@ -6285,7 +6277,7 @@ normal
 nointerpret  
 
   ;; turn off the compiler, if we were compiling
-  stz STATUS
+  stz STATE
 
   ;; print an error, in three stages. first, a space; then, the
   ;; undefined word; finally, the error message.
@@ -6491,7 +6483,7 @@ reverttoterm
   bra finishedread
 terminal
   ;; are we compiling?
-  lda STATUS
+  lda STATE
   beq usualprompt   ; not compiling so say "OK" as usual
   jsr cprompt       ; different prompt to say we're still compiling
   bra afterprompt
