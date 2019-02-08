@@ -1992,6 +1992,7 @@ next
   jmp XT-1          ; two JMP instructions saves us a branch
 addupper
   inc IP+1
+  clc
   jmp XT-1
 
 ;  lda (XT),y        ; XT contains a pointer to a code word. Load
@@ -2189,7 +2190,7 @@ dopick
   lda stackaccess+1
   adc #>stackbase
   sta stackaccess+1
-  clc
+;  clc  carry guaranteed clear here now
   txa               ; now add X + 1
   inc
   adc stackaccess
@@ -2437,7 +2438,7 @@ dostrlit
 
   ;; increment string base address by 1 to skip length byte
 .(
-  clc
+;  clc  carry definitely clear after clitsub
   lda stackbase+3,x
   adc #1
   sta stackbase+3,x
@@ -2485,7 +2486,7 @@ cslitsub
 dovaddr
   dex               ; make space on the stack
   dex
-  clc
+;  clc   carry guaranteed clear
   lda XT            ; find the param space, two bytes after the XT
   adc #2
   sta stackbase+1,x ; and store it on top of the stack
@@ -2553,7 +2554,7 @@ dostore
 ;;; doplusstore is the code for +!
 doplusstore
   jsr pop16         ; put address into stackaccess
-  clc
+;  clc  carry guaranteed clear
   ldy #1
   lda stackbase+1,x  ; load LSB off stack and
   adc (stackaccess)
@@ -2738,7 +2739,7 @@ dohere
 ;;; bytes available to whatever is at the top of the dictionary. It's
 ;;; used to allocate array space to variables.
 doallot
-  clc
+;  clc   carry always clear on entry
   lda DP
   adc stackbase+1,x
   sta DP
@@ -3324,7 +3325,7 @@ nextchar
   beq newline
   sta (SCRATCH)
   jsr puta
-  clc
+;  clc carry always clear here
   lda SCRATCH
   adc #1
   sta SCRATCH
@@ -3407,8 +3408,8 @@ dobranch
   lda (IP)          ; LSB first
   pha
 
-  clc               ; now add the cached offset to the IP
-  pla
+;  clc  carry always clear here
+  pla               ; now add the cached offset to the IP
   adc IP
   sta IP
   pla
@@ -3735,10 +3736,7 @@ doparendo
   lda stackbase+1,x ; LSB of index
   sta (RP)
   dec RP
-  clc               ; pop two cells (four types) off stack
-  txa
-  adc #4
-  tax
+  jsr close2cells
   jmp next          ; done  
 
 
@@ -3915,7 +3913,7 @@ doparenloop
   ;; increment the loop index in-place
 .(
   ldy #1
-  clc
+;  clc  carry always clear here
   lda (RP),y        ; no (),y mode for INC, sadly!
   adc #1
   sta (RP),y
@@ -4054,7 +4052,7 @@ foundflag
 ;;; for LEAVE. It basically just does a branch, but first, it pops
 ;;; some values off the return stack.
 doparenleave
-  clc
+;  clc carry always clear here
   lda RP
   adc #4
   sta RP
@@ -4297,7 +4295,7 @@ setfalse
 ;;;
 do1plus
 .(
-  clc
+;  clc carry always clear here
   inc stackbase+1,x
   bne done
   inc stackbase+2,x
@@ -4319,7 +4317,7 @@ done
 
 do2plus
 .(
-  clc
+;  clc carry always clear here
   lda stackbase+1,x
   adc #2
   sta stackbase+1,x
@@ -4484,7 +4482,7 @@ skipmsb
 dorecurse
 .(
 
-  clc
+;  clc  carry always clear here
   lda CWORD         ; put word address into SCRATCH
   sta SCRATCH
   lda CWORD+1
@@ -4494,7 +4492,7 @@ dorecurse
   inc               ; add one for the length byte
   inc               ; and another two for the link
   inc
-  clc
+;  clc carry still clear
   adc SCRATCH       ; add to address. now scratch will contain
   sta SCRATCH       ; the address of the code word (cfa).
 .(
@@ -4584,7 +4582,7 @@ endabs
 
 
 donegate
-  clc               ; flip bits and add one to form two's complement
+;  clc               ; flip bits and add one to form two's complement
   lda stackbase+1,x
   eor #$ff
   adc #1
@@ -4675,18 +4673,19 @@ compilelit
   jsr commasub      ; compile the pointer
   rts
 
-;;; shared by dotick and dofind
+;;; shared by dotick, dofind, and postpone
 pushxt
+  dex
+  dex
   clc               ; calculate xt. Add length of word, plus one for
   lda (DPTR)        ; the length byte and two for the link
   and #%00011111    ; mask off the status bits
   adc #3            ; max count value is 32, so this won't cause carry
   adc DPTR
-  sta stackaccess
+  sta stackbase+1,x ; add XT to stack, one byte at a time
   lda DPTR+1
   adc #0            ; in case of carry
-  sta stackaccess+1
-  jsr push16        ; push XT on stack
+  sta stackbase+2,x
   rts
 
 dofind
@@ -4974,7 +4973,7 @@ dodump
 ;;; implements COUNT -- take a pointer to a counted string on the stack,
 ;;; and turn it into a pointer to the characters and the count.
 docount
-  clc
+;  clc carry always clear here
   lda stackbase+1,x ; LSB of counted string address
   sta SCRATCH       ; cache it
   adc #1            ; add one (to get address of characters)
@@ -5027,7 +5026,7 @@ end
 
 ;;; double-length addition
 doadd32
-  clc
+;  clc carry always clear here
   lda stackbase+1,x ; byte #1
   adc stackbase+5,x
   sta stackbase+5,x ; leaves result in lower area on stack
@@ -5051,7 +5050,7 @@ drop2cells
 ;;; mixed-length addition. Add a 16-bit wide number on the top of
 ;;; the stack to a 32-bit wide number below it.
 doaddmix
-  clc
+;  clc carry always clear here
   lda stackbase+1,x ; byte #1
   adc stackbase+3,x
   sta stackbase+3,x ; leaves result in lower area on stack
@@ -5088,7 +5087,7 @@ dosub32
   jmp drop2cells
 
 donegate32
-  clc
+;  clc carry always clear here
   lda stackbase+1,x ; add one and flip bits to calculate two's complement
   eor #$ff
   adc #1
@@ -7248,32 +7247,24 @@ endmatch
   bra return1       ; otherwise c1 < c2 so return 1
 ident
 return0
-  clc               ; drop three cells from the stack
-  txa
-  adc #6
-  tax
+  jsr close3cells
   stz stackbase+1,x
   stz stackbase+2,x
   jmp next
 return1
-  clc               ; drop three cells from the stack
-  txa
-  adc #6
-  tax
+  jsr close3cells
   lda #1
   sta stackbase+1,x
   stz stackbase+2,x
   jmp next
 returnm1
-  clc               ; drop three cells from the stack
-  txa
-  adc #6
-  tax
+  jsr close3cells
   lda #$ff
   sta stackbase+1,x
   sta stackbase+2,x
   jmp next
 .)
+
   
   
 
@@ -10014,7 +10005,7 @@ flushbuf
   ;; put next base address on the stack
   dex
   dex
-  clc
+;  clc carry clear at this point
   lda SCRATCH+2
   sta stackbase+1,x
   lda SCRATCH+3
@@ -10224,7 +10215,7 @@ loadit
   ;; address into it
   dex
   dex
-  clc
+;  clc carry clear at this point
   lda stackbase+7,x ; was +5, now +7
   sta stackbase+1,x
   lda stackbase+8,x
