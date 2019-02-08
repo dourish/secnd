@@ -1695,7 +1695,6 @@ cliteralcode
 d184code
   .word docliteral
 
-dtop
 d185entry
   .byte IMM+2
   .byte "c", $22    ; for c"
@@ -1703,6 +1702,16 @@ d185link
   .word d184entry
 d185code
   .word docquote
+
+dtop
+d186entry
+  .byte 4
+  .byte "find"
+d186link
+  .word d185entry
+d186code
+  .word dofind
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -4618,16 +4627,49 @@ done
 dotick
 .(
   jsr readnext
-  jsr dictmatch
+  jsr dmatchword
 
   lda DPTR+1
   bne continue
+tickabort
   lda #$20
   jsr puta
   jsr printword
   jmp abortnotdef
 
 continue
+  jsr pushxt
+
+  ;; now check -- are we compiling? If so, then compile a literal
+  ;; with that value. If not, leave it on the stack.
+  lda STATE
+  beq nocompile
+
+  ;; compiling (note code shared with interpreter BUG COMBINE)
+  jsr compilelit
+
+nocompile
+done
+  jmp next
+.)
+
+
+;;; take the value on the stack and compile it in as a literal
+;;; (ie compile dolitcode then the stack value)
+
+compilelit
+  dex
+  dex
+  lda #<dolitcode
+  sta stackbase+1,x
+  lda #>dolitcode
+  sta stackbase+2,x
+  jsr commasub      ; compile dolitcode
+  jsr commasub      ; compile the pointer
+  rts
+
+;;; shared by dotick and dofind
+pushxt
   clc               ; calculate xt. Add length of word, plus one for
   lda (DPTR)        ; the length byte and two for the link
   and #%00011111    ; mask off the status bits
@@ -4637,42 +4679,41 @@ continue
   lda DPTR+1
   adc #0            ; in case of carry
   sta stackaccess+1
+  jsr push16        ; push XT on stack
+  rts
 
-  ;; now check -- are we compiling? If so, then compile a literal
-  ;; with that value. If not, push it on the stack.
-  lda STATE
-  beq nocompile
+dofind
+.(
+  jsr pop16
+  jsr dmatchstack
+  lda DPTR+1
+  beq nomatch
 
-  ;; compiling (note code shared with interpreter BUG COMBINE)
-  ldy #0
-  lda #<dolitcode
-  sta (DP),y
-  iny
-  lda #>dolitcode
-  sta (DP),y
-  iny
-  lda stackaccess
-  sta (DP),y
-  iny
-  lda stackaccess+1
-  sta (DP),y
-  iny
+  jsr pushxt
 
-  ;; add Y to DP
-  clc
-  tya
-  adc DP
-  sta DP
-  lda DP+1
-  adc #0
-  sta DP+1
+  dex               ; space for one more return value
+  dex
+  ; IMMEDIATE?
+  lda (DPTR)
+  and #IMM
+  beq noimmed
+  lda #1
+  sta stackbase+1,x
+  stz stackbase+2,x
   bra done
-
-nocompile
-  jsr push16
+noimmed
+  lda #$FF
+  sta stackbase+1,x
+  sta stackbase+2,x
 done
   jmp next
+
+nomatch
+  jsr push16        ; put address back on stack
+  jmp dofalse       ; return a FALSE on the stack
 .)
+
+  
 
 ;;; doforget implements FORGET. Uses the same dictionary matching
 ;;; routine as the text interpreter (I'm gradually breaking this stuff
@@ -4680,7 +4721,7 @@ done
 doforget
 .(
   jsr readnext      ; read next word from input stream
-  jsr dictmatch     ; look for a match
+  jsr dmatchword    ; look for a match
   lda DPTR+1        ; no words on zero page, so only need to check this
   beq nomatch
 
@@ -5939,18 +5980,7 @@ dobrchar
   lda WORD+1        ; +1 to skip the character count
   sta stackbase+1,x
   stz stackbase+2,x
-
-  ;; put dolitcode on stack
-  dex
-  dex
-  lda #<dolitcode
-  sta stackbase+1,x
-  lda #>dolitcode
-  sta stackbase+2,x
-
-  ;; compile them both
-  jsr commasub
-  jsr commasub
+  jsr compilelit    ; compile it in as a literal
 
   jmp next
 
@@ -6218,7 +6248,7 @@ interploop
   jsr readnext
 
   ;; search for a match in the dictionary
-  jsr dictmatch
+  jsr dmatchword
   lda DPTR+1        ; no words on zero page, so this indicates failure
   beq nomatch
 
@@ -6337,14 +6367,7 @@ done
   ;; we are compiling. so we need to add this to the current
   ;; word as a literal. that means adding the code for DOLIT
   ;; and then the number.
-  dex
-  dex
-  lda #<dolitcode
-  sta stackbase+1,x
-  lda #>dolitcode
-  sta stackbase+2,x
-  jsr commasub      ; compile dolitcode
-  jsr commasub      ; compile the number
+  jsr compilelit
 
 normal
   jmp interploop
@@ -6380,11 +6403,19 @@ next_char
 
   rts
 
-;;; dictmatch looks up a word in the dictionary. The word being
+;;; look up a word in the dictionary. The word being 
 ;;; matched is indicated by WORD, which holds a pointer to a
-;;; counted string. On exist, DPTR either points to the entry
-;;; for the word, or 0000 in case of no match.
-dictmatch
+;;; counted string; it is copied over into stackaccess for a
+;;; second entry point for stack lookups.
+;;; On exit, DPTR either points to the entry for the word, or
+;;; 0000 in case of no match.
+dmatchword
+  lda #<WORD
+  sta stackaccess
+  lda #>WORD
+  sta stackaccess+1
+
+dmatchstack
   ;; set up search by initializing dictionary pointer
   lda DT
   sta DPTR
@@ -6406,15 +6437,16 @@ compareentry
   ldy #0
   lda (DPTR),y
   and #%00011111    ; mask off the tags
-  cmp WORD,y        ; compare word lengths
+  cmp (stackaccess),y  ; compare word lengths
   bne trynext       ; no match
 
   ;; now compare words. do this from the end (for easier testing)
-  ldy WORD
+  lda (stackaccess)
+  tay
 .(
 nextchar
   lda (DPTR),y
-  cmp WORD,y
+  cmp (stackaccess),y
   bne trynext
   dey
   bne nextchar
