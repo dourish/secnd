@@ -1703,7 +1703,6 @@ d185link
 d185code
   .word docquote
 
-dtop
 d186entry
   .byte 4
   .byte "find"
@@ -1712,6 +1711,14 @@ d186link
 d186code
   .word dofind
 
+dtop
+d187entry
+  .byte IMM+8
+  .byte "postpone"
+d187link
+  .word d186entry
+d187code
+  .word dopostpone
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -4625,19 +4632,19 @@ done
 ;;; dictionary. In the interpreter, leaves the xt on the stack; in
 ;;; the compiler, compiles it in to the current definition.
 dotick
-.(
   jsr readnext
   jsr dmatchword
 
   lda DPTR+1
-  bne continue
+  bne tickproceed
 tickabort
   lda #$20
   jsr puta
   jsr printword
   jmp abortnotdef
 
-continue
+tickproceed
+.(
   jsr pushxt
 
   ;; now check -- are we compiling? If so, then compile a literal
@@ -4713,7 +4720,17 @@ nomatch
   jmp dofalse       ; return a FALSE on the stack
 .)
 
-  
+
+dopostpone
+  jsr readnext
+  jsr dmatchword
+  lda DPTR+1
+  bne ppcontinue
+  bra tickabort  
+ppcontinue
+  jsr pushxt
+  jsr commasub
+  jmp next
 
 ;;; doforget implements FORGET. Uses the same dictionary matching
 ;;; routine as the text interpreter (I'm gradually breaking this stuff
