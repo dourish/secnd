@@ -45,7 +45,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$3C00
+USERBASE=$3D00
 #endif
 
 ;;;
@@ -1711,7 +1711,6 @@ d186link
 d186code
   .word dofind
 
-dtop
 d187entry
   .byte IMM+8
   .byte "postpone"
@@ -1719,6 +1718,15 @@ d187link
   .word d186entry
 d187code
   .word dopostpone
+
+dtop
+d188entry
+  .byte 6
+  .byte "sdsave"
+d188link
+  .word d187entry
+d188code
+  .word dosdsave
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -1992,15 +2000,8 @@ next
   jmp XT-1          ; two JMP instructions saves us a branch
 addupper
   inc IP+1
-  clc
+  clc               ; ensure carry always clear when entering word
   jmp XT-1
-
-;  lda (XT),y        ; XT contains a pointer to a code word. Load
-;  sta CODEVEC+1     ; the code address stored there into CODEVEC.
-;  lda (XT)
-;  sta CODEVEC
-
-;  jmp (CODEVEC)     ; execute the code for this instruction/word
 
 
 ;;; EXIT is the routine that is called at the end of each colon-defined
@@ -2593,29 +2594,18 @@ dovariable
   clc               ; indicates we want create to update DT
   jsr createsub     ; use CREATE to set up new dictionary entry
 
-  ldy #1
-
   ;; set code to dovaddr
+  dex
+  dex
   lda #<dovaddr
-  sta (DP)
+  sta stackbase+1,x
   lda #>dovaddr
-  sta (DP),y
-  iny
+  sta stackbase+2,x
+  jsr commasub
 
-  iny               ; bump twice more to allow parameter space
-  iny               ; for storage
+  ; bump twice more to allow parameter space for storage
+  jmp incDPby2
 
-.(
-  clc               ; update DP to next available space
-  tya               ; by adding bytes consumed to DP
-  adc DP
-  sta DP
-  bcc continue
-  inc DP+1
-continue
-.)
- 
-  jmp next
 
 
 ;;; create a new entry in the dictionary using the next word given
@@ -2626,22 +2616,14 @@ docreate
   clc               ; indicates that create should update DT
   jsr createsub
 
-  ldy #1
+  dex
+  dex
   lda #<dovaddr
-  sta (DP)
+  sta stackbase+1,x
   lda #>dovaddr
-  sta (DP),y
-  iny
+  sta stackbase+2,x
+  jsr commasub
 
-.(
-  clc
-  tya
-  adc DP
-  sta DP
-  bcc done
-  inc DP+1
-done
-.)
   jmp next
 
 
@@ -3385,17 +3367,6 @@ dozerobra
 nonzero
   ;; otherwise we will continue with processing, but first,
   ;; increment IP to skip the branch offset.
-;.(
-;  clc
-;  lda IP
-;  adc #2
-;  sta IP
-;  bcc skipmsb
-;  inc IP+1
-;skipmsb
-;.)
-;
-;  jmp next          ; all done, proceed to next instruction
   jmp incIPby2
 
 ;;; dobranch is used by ELSE; does an immediate branch. So, it's just
@@ -7703,6 +7674,10 @@ done
   jmp next
 .)
 
+dosdsave
+  jsr sdsavegen
+  jmp next
+
 
 ;; SECOND LAYER -- SD LAYER
 ;;
@@ -7848,6 +7823,27 @@ sdsavebuf
   sta SCRATCH+9
 
   bra startsave
+
+;;; save the buffer back to the block from which it was loaded,
+;;; as cached at CURSEC
+sdsaveback
+  jsr open2cells
+  lda CURSEC
+  sta stackbase+1,x
+  lda CURSEC+1
+  sta stackbase+2,x
+  lda CURSEC+2
+  sta stackbase+3,x
+  lda CURSEC+3
+  sta stackbase+4,x
+
+  lda #<LBLOCK
+  sta SCRATCH+8
+  lda #>LBLOCK
+  sta SCRATCH+9
+
+  bra startsave
+
 
 ;;; Save to block specified by double on the stack, translating
 ;;; between number formats. Takes address from stack to identify
@@ -8031,6 +8027,297 @@ sdsavenext
 
   ;; now jump to regular block save code
   jmp sdsavebuf
+
+
+;;;
+;;; generic sd write of an arbitrary block of memory to
+;;; an offset in a cluster. (addr count cluster offset)
+;;; all parameters are regular 16-bit cells.
+;;; after initial setup, three phases--
+;;; in phase 1, write any partial block at the start of data
+;;; in phase 2, write all full blocks
+;;; in phase 3, write any partial block at the end
+sdsavegen
+.(
+  ;; copy the base data out of the stack
+  lda stackbase+7,x ; the base address for the write
+  sta SCRATCH+10
+  lda stackbase+8,x
+  sta SCRATCH+11
+
+  lda stackbase+5,x ; the number of bytes to write
+  sta SCRATCH+12
+  lda stackbase+6,x
+  sta SCRATCH+13
+
+  lda stackbase+1,x ; the offset into the cluster
+  sta SCRATCH+14
+  lda stackbase+2,x
+  sta SCRATCH+15
+
+  ;; move cluster number down the stack as a double
+  stz stackbase+7,x  
+  stz stackbase+8,x
+  lda stackbase+3,x
+  sta stackbase+5,x
+  lda stackbase+4,x
+  sta stackbase+6,x
+
+  jsr close2cells   ; leaves only cluster double on stack
+  jsr cltosector    ; convert cluster to sector number
+
+;;; phase 1
+;;; write the partial sector at the start of the write block
+;;; if offset is a multiple of 512, there's nothing to do here.
+;;; the amount of data to be written is 512-(offset mod 512).
+;;; if we need to write into a partial block, we need to load
+;;; that block first
+;;; take offset and mask off bottom nine bits
+phase1
+  lda SCRATCH+14
+  sta SCRATCH+6
+  lda SCRATCH+15
+  and #1
+  sta SCRATCH+7     ; S+6/7 is offset mod 512
+
+  ora SCRATCH+6     ; if both are zero, nothing to process
+  bne continue
+  jmp phase2
+
+continue
+  sec
+  lda #0
+  sbc SCRATCH+6
+  sta SCRATCH+6
+  lda #2
+  sbc SCRATCH+7
+  sta SCRATCH+7     ; S+6/7 now 512-(offset mod 512)
+
+  ;; which block to load? take base sector number then
+  ;; add offset div 512 to get sector to load
+
+  lda SCRATCH+15    ; MSB of offset
+  lsr               ; shift right once to div by 512
+  clc               ; bit 0 was shifted into carry
+  adc stackbase+1,x ; add directly to sector address
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+  
+  ;; load block into default buffer
+tag1
+  jsr sdloadbuf
+;  jsr close2cells this was for debugging
+
+  ;; copy text onto the latter part of the buffer
+  ;; number of bytes to copy is offset mod 512
+  ;; location is IOSENTINEL minus offset mod 512
+
+  ;; push srcaddr
+  dex
+  dex
+  lda SCRATCH+10
+  sta stackbase+1,x
+  lda SCRATCH+11
+  sta stackbase+2,x
+
+  ;; push destaddr
+  dex
+  dex
+  sec
+  lda #<IOSENTINEL
+  sbc SCRATCH+6
+  sta stackbase+1,x
+  lda #>IOSENTINEL
+  sbc SCRATCH+7
+  sta stackbase+2,x
+
+  ;; push count. this is the lower of the total count
+  ;; or the calculated count, so check that first.
+  sec
+  lda SCRATCH+12
+  sbc SCRATCH+6
+  lda SCRATCH+13
+  sbc SCRATCH+7
+  bvc lower
+  eor #$80
+lower
+  bpl notlower
+  ;; yes, so restore original count
+  lda SCRATCH+12
+  sta SCRATCH+6
+  lda SCRATCH+13
+  sta SCRATCH+7
+notlower
+
+  dex
+  dex
+  lda SCRATCH+6
+  sta stackbase+1,x
+  lda SCRATCH+7
+  sta stackbase+2,x
+
+tag0
+  jsr movesetup     ; set up the move parameters
+  jsr moveupsub     ; do the copy
+  jsr close3cells   ; clean up stack
+tag0a
+
+  ;; adjust counts
+  clc               ; master base of copy region
+  lda SCRATCH+10
+  adc SCRATCH+6
+  sta SCRATCH+10
+  lda SCRATCH+11
+  adc SCRATCH+7
+  sta SCRATCH+11
+
+  sec               ; master count of bytes to copy
+  lda SCRATCH+12
+  sbc SCRATCH+6
+  sta SCRATCH+12
+  lda SCRATCH+13
+  sbc SCRATCH+7
+  sta SCRATCH+13
+
+  ;; write it out
+tag2
+  jsr sdsaveback
+
+  ;; set up next sector number on stack
+  jsr stacknextsector
+
+;;; phase 2
+;;; write some number of complete blocks
+;;; how many complete blocks? count div 512
+phase2
+  lda SCRATCH+13
+  lsr
+  sta SCRATCH+6
+  beq phase3        ; nothing to do here
+  stz SCRATCH+7     ; S+7/8 is the number of complete blocks to write
+
+ph2loop
+
+  ;; sector number is already on the stack. add the current base
+  ;; address from which we're going to save 512 bytes.
+  dex
+  dex
+  lda SCRATCH+10
+  sta stackbase+1,x
+  lda SCRATCH+11
+  sta stackbase+2,x
+
+tag3
+  jsr sdsavefrommem ; save the data
+  ;jsr close3cells this was for debugging
+
+  ;; load next block address onto stack
+  jsr stacknextsector
+
+  ;; increment base address by 512
+  clc
+  lda SCRATCH+11
+  adc #$02
+  sta SCRATCH+11
+
+  ;; not decrementing the master count here -- leave to end
+
+  ;; decrement number of blocks by 1
+  dec SCRATCH+6
+
+  bne ph2loop       ; loop while more to do
+
+  ;; set count to count mod 512
+  lda SCRATCH+13
+  and #$01
+  sta SCRATCH+13
+
+;;; phase 3
+;;; write whatever partial sector is left over
+;;; it's the number of bytes in SCRATCH+12/13
+;;; but first we need to load the block, in order to preserve
+;;; the data that we don't overwrite.
+phase3
+  ;; anything left to do?
+  lda SCRATCH+12
+  ora SCRATCH+13
+  beq endphase3
+
+  ;; load the block
+  ;; sector address is already on the stack
+tag4
+  jsr sdloadbuf
+  ;jsr close2cells this was for debugging
+
+  ;; set up the parameters to copy remaining data into
+  ;; the IO buffer
+
+  ;; push srcaddr
+  dex
+  dex
+  lda SCRATCH+10
+  sta stackbase+1,x
+  lda SCRATCH+11
+  sta stackbase+2,x
+
+  ;; push destaddr
+  dex
+  dex
+  lda #<LBLOCK
+  sta stackbase+1,x
+  lda #>LBLOCK
+  sta stackbase+2,x
+
+  ;; push count
+  dex
+  dex
+  lda SCRATCH+12
+  sta stackbase+1,x
+  lda SCRATCH+13
+  sta stackbase+2,x
+
+  jsr movesetup     ; set up copy parameters
+  jsr moveupsub     ; do the copy
+  jsr close3cells   ; clean up the stack
+
+  ;; save the block
+tag5
+  jsr sdsaveback
+
+endphase3
+  rts
+.)
+
+
+stacknextsector
+  ;; restore sector number on stack?
+  dex
+  dex
+  dex
+  dex
+  clc
+  lda CURSEC
+  adc #1
+  sta stackbase+1,x
+  lda CURSEC+1
+  adc #0
+  sta stackbase+2,x
+  lda CURSEC+2
+  adc #0
+  sta stackbase+3,x
+  lda CURSEC+3
+  adc #0
+  sta stackbase+4,x
+  rts
+
 
 
 sendtoken
@@ -8876,28 +9163,20 @@ fatsetsub
   lda stackaccess+1
   sta (SCRATCH),y
 
-  jsr open2cells    ; make space for a double on the stack
-  lda CURSEC        ; write in current disk block number
-  sta stackbase+1,x ; cached at load time
-  lda CURSEC+1
-  sta stackbase+2,x
-  lda CURSEC+2
-  sta stackbase+3,x
-  lda CURSEC+3
-  sta stackbase+4,x
-  jsr sdsavebuf     ; write back the block
+;  jsr open2cells    ; make space for a double on the stack
+;  lda CURSEC        ; write in current disk block number
+;  sta stackbase+1,x ; cached at load time
+;  lda CURSEC+1
+;  sta stackbase+2,x
+;  lda CURSEC+2
+;  sta stackbase+3,x
+;  lda CURSEC+3
+;  sta stackbase+4,x
+;  jsr sdsavebuf     ; write back the block
+  jsr sdsaveback    ; write back the block
+  inc CURSEC+1      ; jump ahead by 256 blocks for second FAT
+  jsr sdsaveback    ; do it again
 
-  jsr open2cells    ; do it again for the second copy of the FAT
-  lda CURSEC        ; write in current disk block number
-  sta stackbase+1,x ; cached at load time
-  lda CURSEC+1
-  inc               ; second block is at first+256. there will be no carry.
-  sta stackbase+2,x
-  lda CURSEC+2
-  sta stackbase+3,x
-  lda CURSEC+3
-  sta stackbase+4,x
-  jsr sdsavebuf     ; write back the block
 ;  lda #"!
 ;  jsr puta
   rts
