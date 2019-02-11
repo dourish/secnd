@@ -1216,12 +1216,12 @@ d122code
 ;  .word dofreedir
 
 d126entry
-  .byte 6
-  .byte "mkfile"
+  .byte 7
+  .byte "newfile"
 d126link
   .word d122entry
 d126code
-  .word domkfile
+  .word donewfile
 
 d127entry
   .byte 6
@@ -1273,12 +1273,12 @@ d132code
   .word doshow
 
 d133entry
-  .byte 7
-  .byte "flookup"
+  .byte 4
+  .byte "file"
 d133link
   .word d132entry
 d133code
-  .word doflookup
+  .word dofile
 
 ;d134entry
 ;  .byte 5
@@ -1297,19 +1297,19 @@ d135link
 d135code
   .word doinclude
 
-;d136entry
-;  .byte 9
-;  .byte "saveblock"
-;d136link
-;  .word d135entry
-;d136code
-;  .word dosaveblock
+d136entry
+  .byte 9
+  .byte "saveblock"
+d136link
+  .word d135entry
+d136code
+  .word dosaveblock
 
 d137entry
   .byte 5
   .byte "using"
 d137link
-  .word d135entry
+  .word d136entry
 d137code
   .word dousing
 
@@ -4807,7 +4807,7 @@ done
 ;; switch input to a streaming file.
 doinclude
   jsr readnext      ; get name of file into WORD
-  jsr lookupdir     ; look it up in the root directory
+  jsr finddirword   ; look it up in the root directory
 .(
   bcc continue
   jmp abortnofile
@@ -7674,6 +7674,15 @@ done
   jmp next
 .)
 
+dosaveblock
+.(
+  jsr sdsavebuf
+  bcc done
+  jmp abortdiskerror
+done
+  jmp next
+.)
+
 dosdsave
   jsr sdsavegen
   jmp next
@@ -8517,6 +8526,11 @@ endofdir
 doshow
   jsr readnext      ; get next word and put it into input buffer
   jsr showsub
+.(
+  bcc continue      ; error reported?
+  jmp abortnofile
+continue
+.)
   jmp next
 
 
@@ -8524,12 +8538,10 @@ doshow
 ;;; with the disk manager. presumes on entry that the filename
 ;;; is in WORD.
 showsub
-  jsr lookupdir     ; look up in the directory
-
+  jsr finddirword   ; look up in the directory
 .(
-  bcc continue      ; file name found?
-  jmp abortnofile
-
+  bcc continue
+  rts
 continue
 .)
   ;; grab the pointer to the data
@@ -8664,6 +8676,7 @@ nextblock
 
 endshow
   jsr crlf
+  clc
   rts
 
 ;doloadfile
@@ -8683,7 +8696,7 @@ loadfilesub
   inx
   inx
 
-  jsr lookupdir
+  jsr finddirword
 
 .(
   bcc continue
@@ -8857,7 +8870,7 @@ done
 ;;; operations should load and save.
 dousing
   jsr readnext      ; get next word and put it into input buffer
-  jsr lookupdir     ; search the root directory
+  jsr finddirword   ; search the root directory
 
 .(
   bcc continue
@@ -9181,10 +9194,9 @@ fatsetsub
 ;  jsr puta
   rts
 
-;; BUG BUG TESTING ONLY
-doflookup
-  jsr readnext      ; get next word and put it into input buffer
-  jsr lookupdir     ; look it up
+
+dofile
+  jsr finddirstack  ; look up filename from stack
 .(
   bcc continue      ; found the file?
   jmp abortnofile
@@ -9334,13 +9346,24 @@ endfind
 .)
 
 
-;; take filename in WORD, look up in root directory. On success,
-;; the relevant directory sector is left in the LBLOCK/HBLOCK area,
-;; and the stack contains both the double-precision sector number
-;; and a pointer to the matching entry within it. On failure,
-;; stack is unchanged and carry flag is set.
-lookupdir
-.(
+;;; Look up filename in root directory. On success, the
+;;; relevant directory sector is left in the LBLOCK/HBLOCK area,
+;;; and the stack contains both the double-precision sector number
+;;; and a pointer to the matching entry within it. On failure,
+;;; stack is unchanged and carry flag is set.
+;;; There are two entry-points. finddirword takes the filename
+;;; from WORD, while finddirstack takes a c-string on the stack.
+finddirword
+  lda #<WORD
+  sta stackaccess
+  lda #>WORD
+  sta stackaccess+1
+  bra finddirshared
+
+finddirstack
+  jsr pop16
+
+finddirshared
   jsr mkcanon       ; transform filename into canonical form
 
   jsr sdloadroot    ; load the root directory
@@ -9350,6 +9373,7 @@ lookupdir
   lda #>LBLOCK
   sta SCRATCH+7
 
+.(
   ;; loop until end of directory block or match
 matchloop
   lda (SCRATCH+6)   ; null entry (ie, end of directory)?
@@ -9408,11 +9432,6 @@ endofdirectory
   rts
 .)
 
-
-;;; TMP TESTING ONLY
-;dofreedir
-;  jsr findfreedir
-;  jmp next
 
 ;;; find a free directory entry. returns cluster and offset.
 findfreedir
@@ -9489,8 +9508,8 @@ endofdirectory
 
 ;;; Filenames are stored in directories in FAT16 in a canonical format:
 ;;; all caps, with the base name padded to eight characters using spaces,
-;;; and the extension padded to three. Make name in WORD into a canonical
-;;; form stored on PAD.
+;;; and the extension padded to three. Take a c-string from stackaccess
+;;; and rewrite it onto the PAD in canonical form.
 mkcanon
   ;; reset PADPTR
   lda #<PAD
@@ -9511,11 +9530,11 @@ loop
   ;; now, copy filename into the canonicalized version, switching
   ;; lower case to upper case along the way
 .(
-  lda WORD          ; null-terminate the string, just in case
+  lda (stackaccess) ; null-terminate the string, just in case
   tay
   iny
   lda #0
-  sta WORD,y
+  sta (stackaccess),y
 
   ldy #1            ; skip the first byte (char count)
   lda PADPTR
@@ -9523,7 +9542,7 @@ loop
   lda PADPTR+1
   sta SCRATCH+1
 loop
-  lda WORD,y
+  lda (stackaccess),y
   cmp #"."
   beq endname
   cmp #"a"
@@ -9549,7 +9568,7 @@ endname
   ;; finally, copy the extension.
 .(
 extloop
-  lda WORD,y
+  lda (stackaccess),y
   beq done
   cmp #"a"
   bcc copy
@@ -9566,14 +9585,23 @@ done
 .)
   rts
 
-;;; BUG TMP TESTING
-domkfile
-  jsr mkfile
+
+donewfile
+  jsr newfilesub
   jmp next
 
-;;; create a new file BUG SHOULD ENSURE NAME NOT USED
-mkfile
-  jsr readnext      ; get the filename, leaving it in WORD
+;;; Create a new file named by c-string on stack. Leave directory
+;;; details on the stack, like FILE. Sets file to be length 0 but
+;;; does allocate a cluster for it in the FAT.
+newfilesub
+.(
+  jsr dup16         ; copy string address
+  jsr finddirstack  ; look it up
+  bcs continue      ; make sure file name DOESN'T exist
+  jmp abortnewfile
+continue
+  clc
+.)
 
   ;; find available cluster. returns cluster number.
   jsr findfreecluster
@@ -9595,6 +9623,7 @@ mkfile
   sta stackbase+1,x
   lda SCRATCH+15
   sta stackbase+2,x
+
   jsr fatsetsub
 
   ;; find directory slot. returns sector and offset. sector is loaded.
@@ -9605,27 +9634,35 @@ mkfile
 continue
 .)
 
-  clc
+;  clc  carry guaranteed clear here
   lda stackbase+1,x
   adc #<LBLOCK
-  sta SCRATCH+2
-  sta stackaccess   ; BUG WHY THIS?
+  sta SCRATCH+12
+;  sta stackaccess   ; BUG WHY THIS?
   lda stackbase+2,x
   adc #>LBLOCK
-  sta SCRATCH+3
-  sta stackaccess+1 ; AND THIS?
+  sta SCRATCH+13
+;  sta stackaccess+1 ; AND THIS?
+
+  ;; grab the name string address off the stack, although it's
+  ;; buried now.
+  lda stackbase+7,x
+  sta stackaccess
+  lda stackbase+8,x
+  sta stackaccess+1
 
   jsr mkcanon       ; rewrite name in canonical form
 
-  ;; NOTE stack is 6 bytes deep here after findfreedir
+  ;; NOTE stack is 8 bytes deep here after findfreedir
 
   ;; set name
   dex
   dex
-  lda SCRATCH+2
+  lda SCRATCH+12
   sta stackbase+1,x
-  lda SCRATCH+3
+  lda SCRATCH+13
   sta stackbase+2,x
+
   jsr copypadname
   inx
   inx
@@ -9633,46 +9670,46 @@ continue
   ;; set attributes
   lda #0
   ldy #$0B
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
 
-  ;; set dates
+  ;; set dates BUG SKIP THIS ALTOGETHER??? (JUST SET Y)
   lda #0
   ldy #$0D
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 0E
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 0F
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 10
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 11
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 12
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny  ; 13
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
 
   ;; set cluster #
   ldy #$1A
   lda SCRATCH+14
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny
   lda SCRATCH+15
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
 
   ;; set size
   ldy #$1C
   lda #0
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
   iny
-  lda #$80
-  sta (SCRATCH+2),y
-  iny
-  lda #0
-  sta (SCRATCH+2),y
+;  lda #$80
+  sta (SCRATCH+12),y
   iny
   lda #0
-  sta (SCRATCH+2),y
+  sta (SCRATCH+12),y
+  iny
+  lda #0
+  sta (SCRATCH+12),y
 
   ;; stack currently has directory block and offset for
   ;; entry we've been filling. Drop offset and write
@@ -9681,12 +9718,31 @@ continue
   inx
   jsr sdsavebuf
 
+  ;; we've ended with just the name on the stack. set up the
+  ;; return stack that we want
+  jsr open2cells
+  lda CURSEC
+  sta stackbase+3,x
+  lda CURSEC+1
+  sta stackbase+4,x
+  lda CURSEC+2
+  sta stackbase+5,x
+  lda CURSEC+3
+  sta stackbase+6,x
+  lda SCRATCH+12
+  sta stackbase+1,x
+  lda SCRATCH+13
+  sta stackbase+2,x
+
   ;; return
   rts
 
+abortnewfile
 abortmkfile
   ;; BUG BUG UNALLOCATE FAT AND ISSUE ERROR MESSAGE
   rts
+
+
 
 ;;; TESTING
 dorename
@@ -9696,7 +9752,7 @@ dorename
 ;;; rename a file, taking both old and new names from the input stream
 renamefile
   jsr readnext
-  jsr lookupdir
+  jsr finddirword
 .(
   bcc continue
   jmp abortgenericsub
@@ -9710,9 +9766,9 @@ continue
 
   ;; make sure that the destination file does NOT exist
 .(
-  jsr lookupdir
+  jsr finddirword
   bcs continue
-  jsr close3cells   ; throw away results from this lookupdir
+  jsr close3cells   ; throw away results from directory lookup
   jsr close3cells   ; and from the last one
   bra abortgenericsub
 continue
@@ -9756,7 +9812,7 @@ dodelete
 
 deletefile
   jsr readnext
-  jsr lookupdir
+  jsr finddirword
 .(
   bcc continue
   jmp abortgenericsub
@@ -9797,7 +9853,7 @@ continue
   rts
 
 
-;;; interpret the address on the stack as an offset into the I/O
+;;; interpret the address on the stack as a pointer into the I/O
 ;;; buffer. Copy the filename from the PAD into that address.
 ;;; Note that this does NOT clear the address off the stack.
 copypadname
