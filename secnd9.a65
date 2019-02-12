@@ -37,7 +37,7 @@
 ;;; v07  SD card integration, block/buffer implementation, editor
 ;;; v08  string routines, cleanup, interpreter work, create/does>
 ;;; v09  ROMmable version, reconfigured text input, expanded FAT16 code,
-;;;      disk manager
+;;;      disk manager, expanded file code
 ;;;
 
 #ifdef ROM
@@ -78,7 +78,7 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 
 ;;; KEY SYSTEM VARIABLES
 ;;;
-;;; BASE is value of the current numeric base
+;;; BASE is variable holding the current numeric base
 ;;; IPTR is the input pointer (next character to be interpreted)
 ;;; IP is the instruction pointer
 ;;; DT (dictionary top) pointer to start (actually, end) of dictionary
@@ -95,8 +95,9 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; INBUFF points to the current non-terminal input area
 ;;; 
 ;;;
+BASE=$000A          ; and 000B (store two bytes but we only use lower)
 USEBLKS=$000D       ; one byte only, block count of USING file
-BASE=$000E          ; and 000F (store two bytes but we only use lower)
+; leave $000E and $000F clear...
 IPTR=$0020          ; and 0021 (input pointer)
 NEXTSECTOR=$0040    ; through $0043 -- next sector to be read in stream
 FILESIZE=$0044      ; through $0047 -- size of file in stream
@@ -5932,11 +5933,13 @@ doident
 dohex
   lda #16
   sta BASE
+  stz BASE+1
   jmp next
 
 dodecimal
   lda #10
   sta BASE
+  stz BASE+1
   jmp next
 
 dobase
@@ -5945,7 +5948,7 @@ dobase
   lda #<BASE
   sta stackbase+1,x
   lda #>BASE
-  sta stackaccess+2
+  sta stackbase+2,x
   jmp next
 
 dochar
@@ -7420,6 +7423,15 @@ abortnofile
   lda #<nofilemsg
   sta PRINTVEC
   lda #>nofilemsg
+  sta PRINTVEC+1
+  jsr printvecstr
+  jmp abort
+
+;;; ABORT with a (different) file error
+abortexists
+  lda #<existserr
+  sta PRINTVEC
+  lda #>existserr
   sta PRINTVEC+1
   jsr printvecstr
   jmp abort
@@ -9587,6 +9599,14 @@ done
 
 
 donewfile
+.(
+  jsr dup16         ; copy string address
+  jsr finddirstack  ; look it up
+  bcs continue      ; make sure file name DOESN'T exist
+  jmp abortexists
+continue
+  clc
+.)
   jsr newfilesub
   jmp next
 
@@ -9594,14 +9614,6 @@ donewfile
 ;;; details on the stack, like FILE. Sets file to be length 0 but
 ;;; does allocate a cluster for it in the FAT.
 newfilesub
-.(
-  jsr dup16         ; copy string address
-  jsr finddirstack  ; look it up
-  bcs continue      ; make sure file name DOESN'T exist
-  jmp abortnewfile
-continue
-  clc
-.)
 
   ;; find available cluster. returns cluster number.
   jsr findfreecluster
@@ -9628,21 +9640,15 @@ continue
 
   ;; find directory slot. returns sector and offset. sector is loaded.
   jsr findfreedir
-.(
-  bcc continue
-  jmp abortmkfile
-continue
-.)
+  bcs abortmkfile
 
 ;  clc  carry guaranteed clear here
   lda stackbase+1,x
   adc #<LBLOCK
   sta SCRATCH+12
-;  sta stackaccess   ; BUG WHY THIS?
   lda stackbase+2,x
   adc #>LBLOCK
   sta SCRATCH+13
-;  sta stackaccess+1 ; AND THIS?
 
   ;; grab the name string address off the stack, although it's
   ;; buried now.
@@ -9672,23 +9678,6 @@ continue
   ldy #$0B
   sta (SCRATCH+12),y
 
-  ;; set dates BUG SKIP THIS ALTOGETHER??? (JUST SET Y)
-  lda #0
-  ldy #$0D
-  sta (SCRATCH+12),y
-  iny  ; 0E
-  sta (SCRATCH+12),y
-  iny  ; 0F
-  sta (SCRATCH+12),y
-  iny  ; 10
-  sta (SCRATCH+12),y
-  iny  ; 11
-  sta (SCRATCH+12),y
-  iny  ; 12
-  sta (SCRATCH+12),y
-  iny  ; 13
-  sta (SCRATCH+12),y
-
   ;; set cluster #
   ldy #$1A
   lda SCRATCH+14
@@ -9697,18 +9686,15 @@ continue
   lda SCRATCH+15
   sta (SCRATCH+12),y
 
-  ;; set size
+  ;; set size to zero
   ldy #$1C
   lda #0
   sta (SCRATCH+12),y
   iny
-;  lda #$80
   sta (SCRATCH+12),y
   iny
-  lda #0
   sta (SCRATCH+12),y
   iny
-  lda #0
   sta (SCRATCH+12),y
 
   ;; stack currently has directory block and offset for
@@ -13021,10 +13007,8 @@ ok:		 .byte "  OK", $0d, $0a, $00
 dots:		 .byte "   ...", $0d, $0a, $00
 notdefinedmsg:   .byte ": not defined", $00
 nestingmsg:	 .byte "  nesting mismatch", $00
-compileerr:      .byte "  compile-only word encountered", $00
+compileerr:      .byte "  compile-only word", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
-inityesmsg:      .byte " initialized", $0d, $0a, $00
-initnosmsg:      .byte " initialization failed", $0d, $0a, $00
 ;timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $00
 initializedmsg:  .byte " initialized ", $00
@@ -13037,5 +13021,6 @@ dirofmsg:        .byte "Directory of ", $00
 nofilemsg:       .byte " no such file", $00
 blockcountmsg:   .byte " exceeds file block count", $00
 generic:	 .byte " generic error",$00
+existserr:	 .byte " file exists",$00
 bytesfree:       .byte " bytes free", $00
 hextable:	 .byte "0123456789ABCDEF"
