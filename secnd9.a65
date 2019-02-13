@@ -12629,6 +12629,10 @@ nextcmd
   bra matchloop
 
 endoftable
+  ;; if there's no SD card present, quit
+  bit VIA_PORTB
+  bvc error
+
   ;; see if I can find a file to execute
   ;; first, copy into WORD, appending ".x65"
   ldy #0
