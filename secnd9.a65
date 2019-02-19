@@ -1,4 +1,3 @@
-
 ;;;
 ;;; SECND - A FORTH FOR 65C02
 ;;;
@@ -68,11 +67,11 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 0200 through 02FF is the return stack (more space than needed)
 ;;; 0300 through 3BFF is the interpreter and compiler code (this file)
 ;;; 3C00 through 633F is user dictionary space
-;;; 6340 through 63DF is temporary string space
+;;; 6340 through 63DF is temporary string space (for S")
 ;;; 63E0 through 7BFF is I/O block space
 ;;; 7C00 through 7DFF is low-level SD I/O buffer space (512 byte block)
 ;;; 7E00 through 7EBF is the PAD (string assembly area)
-;;; 7EC0 through 7EFF is temporary string processing space
+;;; 7EC0 through 7EFF is temporary string processing space (WORD)
 ;;; 7F00 through 7FFF is the input buffer (TIB)
 
 ;;; 
@@ -156,8 +155,9 @@ BEGINFLAG=$FC       ; left by BEGIN
 WHILEFLAG=$FB       ; left by WHILE
 
 BLOCKSIZE=1024
+NBUFFERS=6
 BUFFERSIZE=BLOCKSIZE+4
-BUFFERSPACE=BUFFERSIZE*6
+BUFFERSPACE=BUFFERSIZE*NBUFFERS
 LIMIT=FIRST+BUFFERSPACE
 
 ;;; DECL.A65 has declarations for the VIA and ACIA registers
@@ -1344,7 +1344,8 @@ d141entry
 d141link
   .word d140entry
 d141code
-  .word doprev
+  .word doloadconst
+  .word PREV
 
 d142entry
   .byte 5
@@ -1360,7 +1361,8 @@ d143entry
 d143link
   .word d142entry
 d143code
-  .word dofirst
+  .word doloadconst
+  .word FIRST
 
 d144entry
   .byte 4
@@ -1392,7 +1394,8 @@ d147entry
 d147link
   .word d146entry
 d147code
-  .word douse
+  .word doloadconst
+  .word USE
 
 d148entry
   .byte 3
@@ -1402,19 +1405,19 @@ d148link
 d148code
   .word dospat
 
-d149entry
-  .byte 2
-  .byte ";s"
-d149link
-  .word d148entry
-d149code
-  .word dosemics
+;d149entry
+;  .byte 2
+;  .byte ";s"
+;d149link
+;  .word d148entry
+;d149code
+;  .word dosemics
 
 d150entry
   .byte 9
   .byte "-trailing"
 d150link
-  .word d149entry
+  .word d148entry
 d150code
   .word dodashtrail
 
@@ -1578,7 +1581,8 @@ d170entry
 d170link
   .word d169entry
 d170code
-  .word dobase
+  .word doloadconst
+  .word BASE
 
 d171entry
   .byte 4
@@ -1685,7 +1689,8 @@ d183entry
 d183link
   .word d182entry
 d183code
-  .word dostate
+  .word doloadconst
+  .word STATE
 
 d184entry
   .byte 8
@@ -1720,7 +1725,6 @@ d187link
 d187code
   .word dopostpone
 
-dtop
 d188entry
   .byte 6
   .byte "sdsave"
@@ -1728,6 +1732,15 @@ d188link
   .word d187entry
 d188code
   .word dosdsave
+
+dtop
+dlimitentry
+  .byte 5
+  .byte "limit"
+  .word d188entry
+dlimitcode
+  .word doloadconst
+  .word LIMIT
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -3372,20 +3385,26 @@ nonzero
 
 ;;; dobranch is used by ELSE; does an immediate branch. So, it's just
 ;;; like 0branch if the top stack value is 0; in fact, 0branch calls
-;;; this code in that case
+;;; this code in that case.
+;;;
+;;; I used to use relative addressing for branches, which is the
+;;; traditional implementation strategy. Now switching over to use
+;;; absolute.
 dobranch
   ldy #1  
   lda (IP),y        ; load offset and cache it on the stack
   pha               ; do MSB first because we want to pull
   lda (IP)          ; LSB first
-  pha
-
+;  pha
 ;  clc  carry always clear here
-  pla               ; now add the cached offset to the IP
-  adc IP
+;  pla               ; now add the cached offset to the IP
+;  adc IP
+;  sta IP
+;  pla
+;  adc IP+1
+;  sta IP+1
   sta IP
   pla
-  adc IP+1
   sta IP+1
 
   jmp next
@@ -3450,18 +3469,20 @@ thenproceed
 
   jsr pop16         ; pop branch address into stackaccess
 
-  sec               ; calculate offset
-  lda DP
-  sbc stackaccess
-  sta SCRATCH
-  lda DP+1
-  sbc stackaccess+1
-  sta SCRATCH+1
+;  sec               ; calculate offset
+;  lda DP
+;  sbc stackaccess
+;  sta SCRATCH
+;  lda DP+1
+;  sbc stackaccess+1
+;  sta SCRATCH+1
 
-  lda SCRATCH       ; write it into the branch instruction
+;  lda SCRATCH       ; write it into the branch instruction
+  lda DP
   sta (stackaccess)
   ldy #1
-  lda SCRATCH+1
+;  lda SCRATCH+1
+  lda DP+1
   sta (stackaccess),y
   bra done
 
@@ -3521,18 +3542,20 @@ continue
 
   jsr pop16         ; pop branch address into stackaccess
 
-  sec               ; calculate offset
-  lda DP
-  sbc stackaccess
-  sta SCRATCH
-  lda DP+1
-  sbc stackaccess+1
-  sta SCRATCH+1
+;  sec               ; calculate offset
+;  lda DP
+;  sbc stackaccess
+;  sta SCRATCH
+;  lda DP+1
+;  sbc stackaccess+1
+;  sta SCRATCH+1
 
-  lda SCRATCH       ; write it into the branch instruction
+;  lda SCRATCH       ; write it into the branch instruction
+  lda DP
   sta (stackaccess)
   ldy #1
-  lda SCRATCH+1
+;  lda SCRATCH+1
+  lda DP+1
   sta (stackaccess),y
 
   ;; Finally, put that deferred branch instruction address onto
@@ -3601,26 +3624,26 @@ proceed
   jsr commasub
 
   ;; pull the address at the start of the loop
-  jsr pop16
+;  jsr pop16
 
   ;; now calculate the offset. Subtract current DP from the value
   ;; on the stack. Result is negative number (the branch backwards).
-  sec
-  lda stackaccess
-  sbc DP
-  sta SCRATCH
-  lda stackaccess+1
-  sbc DP+1
-  sta SCRATCH+1
+;  sec
+;  lda stackaccess
+;  sbc DP
+;  sta SCRATCH
+;  lda stackaccess+1
+;  sbc DP+1
+;  sta SCRATCH+1
 
   ;; now write that in as a parameter to the branch.
   ;; BUG lots of needless reads and writes going on here
-  dex
-  dex
-  lda SCRATCH
-  sta stackbase+1,x
-  lda SCRATCH+1
-  sta stackbase+2,x
+;  dex
+;  dex
+;  lda SCRATCH
+;  sta stackbase+1,x
+;  lda SCRATCH+1
+;  sta stackbase+2,x
   jsr commasub
 
   jmp next
@@ -3733,29 +3756,7 @@ looptest
   jmp abortnest
 
 fixleave
-  ;; there's a LEAVEFLAG on the stack, so update the address there
-  ;; it should point to the instruction two cells (four bytes) after
-  ;; this one, so first, calculate that.
-  clc
-  lda DP
-  adc #4
-  sta SCRATCH
-  lda DP+1
-  adc #0            ; in case of carry
-  sta SCRATCH+1
-
-  jsr pop16         ; get the address from the stack
-  sec               ; substract from SCRATCH to get the offset
-  lda SCRATCH
-  sbc stackaccess
-  pha               ; cache LSB
-  lda SCRATCH+1
-  sbc stackaccess+1
-  ldy #1
-  sta (stackaccess),y ; and write it back into stackaccess
-  pla               ; pull the LSB
-  sta (stackaccess)
-
+  jsr resolvebranch
   ;; there may be multiple LEAVEs, so loop around
   jmp looptest
 
@@ -3811,6 +3812,38 @@ skipmsb
 
 ;nodocompile
 ;  jmp abortcompile
+
+
+;;; subroutine to resolve branch addresses left on the stack when
+;;; creating control structures. used by LOOP and by REPEAT to handle
+;;; LEAVE and WHILE structures respectively.
+resolvebranch
+  ;; update the address indicated by the value on the stack. it
+  ;; should point to the instruction two cells (four bytes) after
+  ;; this one, so first, calculate that.
+  clc
+  lda DP
+  adc #4
+  sta SCRATCH
+  lda DP+1
+  adc #0            ; in case of carry
+  sta SCRATCH+1
+
+  jsr pop16         ; get the address from the stack
+;  sec               ; substract from SCRATCH to get the offset
+;  lda SCRATCH
+;  sbc stackaccess
+;  pha               ; cache LSB
+;  lda SCRATCH+1
+;  sbc stackaccess+1
+  ldy #1
+  lda SCRATCH
+  sta (stackaccess)
+  lda SCRATCH+1
+  sta (stackaccess),y ; and write it back into stackaccess
+;  pla               ; pull the LSB
+;  sta (stackaccess)
+  rts
 
 
 ;;; doplusloop implements the compiler behavior for +LOOP. Basically,
@@ -3974,8 +4007,9 @@ doleave
   txa               ; copy X into Y. we'll use Y as the index
   tay               ; for looping down the stack
 
-  ;; BUG BUG BUG this loop is unbounded if we don't find a flag!
 lookforflag
+  cpy #128          ; check if Y has looped around
+  bmi abortleave    ; in which case, we need to abort
   lda stackbase+5,y ; is top item a DOFLAG?
   cmp #DOFLAG
   beq foundflag     ; yes
@@ -3992,6 +4026,9 @@ lookforflag
   iny
   iny
   bra lookforflag
+
+abortleave
+  jmp abortnest
 
 foundflag
   ;; we have found the DOFLAG. use the two cells "above" this for our
@@ -4367,29 +4404,7 @@ reptest
   jmp abortnest
 
 fixwhile
-  ;; there's a LEAVEFLAG on the stack, so update the address there
-  ;; it should point to the instruction two cells (four bytes) after
-  ;; the current DP, so first, calculate that.
-  ;; NB this code is shared with LOOP so integrate
-  clc
-  lda DP
-  adc #4
-  sta SCRATCH
-  lda DP+1
-  adc #0            ; in case of carry
-  sta SCRATCH+1
-
-  jsr pop16         ; get the address from the stack
-  sec               ; substract from SCRATCH to get the offset
-  lda SCRATCH
-  sbc stackaccess
-  pha               ; cache LSB
-  lda SCRATCH+1
-  sbc stackaccess+1
-  ldy #1
-  sta (stackaccess),y ; and write it back into stackaccess
-  pla               ; pull the LSB
-  sta (stackaccess)
+  jsr resolvebranch
 
   ;; may be multiple WHILEs so loop around
   jmp reptest
@@ -4413,20 +4428,22 @@ skipmsb
 
   ;; now calculate the offset. Subtract current DP from the value
   ;; on the stack. Result is negative number (the branch backwards).
-  sec
-  lda stackaccess
-  sbc DP
-  sta SCRATCH
-  lda stackaccess+1
-  sbc DP+1
-  sta SCRATCH+1
+;  sec
+;  lda stackaccess
+;  sbc DP
+;  sta SCRATCH
+;  lda stackaccess+1
+;  sbc DP+1
+;  sta SCRATCH+1
 
   ;; now write that in as a parameter to the branch.
   ;; BUG lots of needless reads and writes going on here
-  lda SCRATCH
+;  lda SCRATCH
+  lda stackaccess
   sta (DP)
   ldy #1
-  lda SCRATCH+1
+;  lda SCRATCH+1
+  lda stackaccess+1
   sta (DP),y
 
   ;; increment DP again
@@ -4875,6 +4892,7 @@ continue
   inx
   inx
 
+  ;; TAG SRC SAV
   ;; save the current SOURCE and input pointer
   dec RP            ; this is just here to keep RP word-aligned
   lda SOURCE        ; store SOURCE on the stack
@@ -5942,14 +5960,14 @@ dodecimal
   stz BASE+1
   jmp next
 
-dobase
-  dex
-  dex
-  lda #<BASE
-  sta stackbase+1,x
-  lda #>BASE
-  sta stackbase+2,x
-  jmp next
+;dobase
+;  dex
+;  dex
+;  lda #<BASE
+;  sta stackbase+1,x
+;  lda #>BASE
+;  sta stackbase+2,x
+;  jmp next
 
 dochar
   jsr readnext
@@ -6183,14 +6201,14 @@ dolatest
   jmp next
 
 ;;; implement STATE (leave address of STATE variable on stack)
-dostate
-  dex
-  dex
-  lda #<STATE
-  sta stackbase+1,x
-  lda #>STATE
-  sta stackbase+2,x
-  jmp next
+;dostate
+;  dex
+;  dex
+;  lda #<STATE
+;  sta stackbase+1,x
+;  lda #>STATE
+;  sta stackbase+2,x
+;  jmp next
 
 
 ;;;
@@ -6570,6 +6588,7 @@ reverttoterm
   ;; BUG BUG BUG this presumes, if we're returning to another block,
   ;; that the block is still loaded in the same part of memory as it
   ;; was. that is not necessarily true. We might need to reload it.
+  ;; TAG SRC SAV
   inc RP
   lda (RP)
   sta IPTR
@@ -6879,6 +6898,7 @@ continue
   pha               ; stash the block number for a moment
   jsr blocksub      ; find/load the block, leave address on stack
   
+  ;; TAG SRC SAV
   lda #0            ; we ignore this top byte but it keeps RP word-aligned
   sta (RP)          ; and storing 0 helps with debugging
   dec RP
@@ -6901,14 +6921,14 @@ continue
   inx
   jmp next
 
-douse
-  dex
-  dex
-  lda USE
-  sta stackbase+1,x
-  lda USE+1
-  sta stackbase+2,x
-  jmp next
+;douse
+;  dex
+;  dex
+;  lda #<USE
+;  sta stackbase+1,x
+;  lda #>USE+1
+;  sta stackbase+2,x
+;  jmp next
 
 dospat
   dex
@@ -6918,11 +6938,6 @@ dospat
   stz stackbase+2,x
   jmp next
 
-dosemics
-  ;; BUG NO LONGER WORKS
-  ;; SHOULD RESTORE SOURCE FROM R-STACK?
-  stz SOURCE
-  jmp next
 
 ;doconvert
 ;  jsr buffersub
@@ -10616,23 +10631,23 @@ doupdate
   sta (PREV),y
   jmp next
 
-doprev
-  dex
-  dex
-  lda #<PREV
-  sta stackbase+1,x
-  lda #>PREV
-  sta stackbase+2,x
-  jmp next
-
-dofirst
-  dex
-  dex
-  lda #<FIRST
-  sta stackbase+1,x
-  lda #>FIRST
-  sta stackbase+2,x
-  jmp next
+;doprev
+;  dex
+;  dex
+;  lda #<PREV
+;  sta stackbase+1,x
+;  lda #>PREV
+;  sta stackbase+2,x
+;  jmp next
+;
+;dofirst
+;  dex
+;  dex
+;  lda #<FIRST
+;  sta stackbase+1,x
+;  lda #>FIRST
+;  sta stackbase+2,x
+;  jmp next
 
 ;;; Flush all buffers that are currently marked as dirty. In
 ;;; some Forths, this is called SAVE-BUFFERS
