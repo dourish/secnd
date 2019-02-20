@@ -1540,6 +1540,7 @@ d165entry
   .byte ","
 d165link
   .word d164entry
+commacode
 d165code
   .word docomma
 
@@ -4716,9 +4717,23 @@ dopostpone
   bne ppcontinue
   bra tickabort  
 ppcontinue
-  jsr pushxt
-  jsr commasub
+  jsr pushxt        ; put the XT on the stack
+  lda (DPTR)        ; immediate word?
+  cmp #128          ; check top bit
+  bcc nonimmediate  ; no...
+  bra ppend         ; yes. compile in the XT
+nonimmediate
+  jsr compilelit    ; compile XT in as literal value
+  dex
+  dex
+  lda #<commacode   ; set up to compile COMMA
+  sta stackbase+1,x
+  lda #>commacode
+  sta stackbase+2,x
+ppend
+  jsr commasub      ; compile in COMMA or XT, depending
   jmp next
+
 
 ;;; doforget implements FORGET. Uses the same dictionary matching
 ;;; routine as the text interpreter (I'm gradually breaking this stuff
