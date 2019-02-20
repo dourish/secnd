@@ -259,7 +259,7 @@ d7code
   .word donotequal
 
 d8entry
-  .byte IMM+6       ; IMM + code for 6  ;; BUG? no need for immediate
+  .byte 6
   .byte "branch"
 d8link
   .word d7entry
@@ -2619,7 +2619,18 @@ dovariable
   jsr commasub
 
   ; bump twice more to allow parameter space for storage
-  jmp incDPby2
+incDPby2
+.(
+  clc
+  lda DP
+  adc #2
+  sta DP
+  bcc skipmsb
+  inc DP+1
+skipmsb
+.)
+
+  jmp next
 
 
 
@@ -2812,9 +2823,6 @@ dotor
   sta (RP)
   dec RP            ; BUG presumes that RP doesn't roll over page boundary
   jmp drop1cell
-;  inx
-;  inx
-;  jmp next
 
 
 ;; dofromr (for Forth word "R>" -- move from r-stack to top of stack
@@ -3624,27 +3632,7 @@ proceed
   sta stackbase+2,x
   jsr commasub
 
-  ;; pull the address at the start of the loop
-;  jsr pop16
-
-  ;; now calculate the offset. Subtract current DP from the value
-  ;; on the stack. Result is negative number (the branch backwards).
-;  sec
-;  lda stackaccess
-;  sbc DP
-;  sta SCRATCH
-;  lda stackaccess+1
-;  sbc DP+1
-;  sta SCRATCH+1
-
-  ;; now write that in as a parameter to the branch.
-  ;; BUG lots of needless reads and writes going on here
-;  dex
-;  dex
-;  lda SCRATCH
-;  sta stackbase+1,x
-;  lda SCRATCH+1
-;  sta stackbase+2,x
+  ;; now write address in as a parameter to the branch.
   jsr commasub
 
   jmp next
@@ -3774,45 +3762,10 @@ loopcompile
 skipmsb
 .)
 
-  ;; now compile in the branch offset. first,
-  ;; pull the address at the start of the loop
-  jsr pop16
-
-  ;; now calculate the offset. Subtract current DP from the value
-  ;; on the stack. Result is negative number (the branch backwards).
-  sec
-  lda stackaccess
-  sbc DP
-  sta SCRATCH
-  lda stackaccess+1
-  sbc DP+1
-  sta SCRATCH+1
-
-  ;; now write that in as a parameter to the branch.
-  ;; BUG lots of needless reads and writes going on here
-  lda SCRATCH
-  sta (DP)
-  ldy #1
-  lda SCRATCH+1
-  sta (DP),y
-
-  ;; increment DP again
-incDPby2
-.(
-  clc
-  lda DP
-  adc #2
-  sta DP
-  bcc skipmsb
-  inc DP+1
-skipmsb
-.)
-
+  ;; at this point, next address on the stack is the branch address
+  ;; so compile it in
+  jsr commasub
   jmp next
-;  jmp incDPby2
-
-;nodocompile
-;  jmp abortcompile
 
 
 ;;; subroutine to resolve branch addresses left on the stack when
@@ -3953,18 +3906,14 @@ testandloop         ; also entry point for (+LOOP)
 .)
 
 takeloop
-  ;; grab the branch address from (IP) and add it to IP
+  ;; take branch address from (IP), make it the new IP
   ldy #1
-  lda (IP),y        ; load MSB
-  pha               ; stash it
-  clc
-  lda (IP)          ; load LSB
-  adc IP            ; add
-  sta IP            ; update
-  pla               ; recover stashed MSB
-  adc IP+1          ; add
-  sta IP+1          ; update
-
+  lda (IP),y
+  pha
+  lda (IP)
+  sta IP
+  pla
+  sta IP+1
   jmp next
 
 noloop
@@ -3974,17 +3923,6 @@ noloop
   lda RP
   adc #4
   sta RP
-;.(
-;  clc
-;  lda IP
-;  adc #2
-;  sta IP
-;  bcc skipmsb
-;  inc IP+1
-;skipmsb
-;.)
-;
-;  jmp next
   jmp incIPby2
 
 
@@ -4743,8 +4681,10 @@ doforget
   jsr readnext      ; read next word from input stream
   jsr dmatchword    ; look for a match
   lda DPTR+1        ; no words on zero page, so only need to check this
-  beq nomatch
+  bne continue
+  jmp abortnotdef
 
+continue
   ;; first, reset DP to this location
   lda DPTR
   sta DP
@@ -4766,14 +4706,8 @@ doforget
   sta DT
   lda (DPTR),y
   sta DT+1
-  bra done  
-  ;; BUG reset DP in here too to reuse space? not sure how safe.
-
-nomatch
-  ;; issue an error
-
-done
   jmp next
+
 .)
 
 ;;; doimmediate implements IMMEDIATE, which sets the IMMEDIATE flag
