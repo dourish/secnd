@@ -43,8 +43,8 @@ improved performance, and worked on both the compiler and interpreter
 mechanisms to bring them more into line with standard FORTH practice.
 
 v09 is the current version, which has involved some more work on
-arithmetic routines, tightening the code to save space, and working
-towards a version that I can happily embed in a ROM.
+arithmetic routines, tightening the code to save space, expanding the
+FAT16 code, and shaping up a version that I can happily embed in a ROM.
 
 Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of

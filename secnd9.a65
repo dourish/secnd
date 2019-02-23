@@ -3090,7 +3090,6 @@ compilestr
   jsr assemblestr   ; read and assemble string from input
 
   ;; now we copy it into space where we are comping, pointed to by DP.
-  ;; BUG this is technically $,"... yeah?
   ldy PAD           ; first, copy the length
   sta (DP)
 
@@ -4361,47 +4360,12 @@ bracompile
 skipmsb
 .)
 
-  ;; now compile in the branch offset. first,
-  ;; pull the address at the start of the loop
-  jsr pop16
+  ;; branch destination is on the stack, so compile it in.
+  jsr commasub
 
-  ;; now calculate the offset. Subtract current DP from the value
-  ;; on the stack. Result is negative number (the branch backwards).
-;  sec
-;  lda stackaccess
-;  sbc DP
-;  sta SCRATCH
-;  lda stackaccess+1
-;  sbc DP+1
-;  sta SCRATCH+1
-
-  ;; now write that in as a parameter to the branch.
-  ;; BUG lots of needless reads and writes going on here
-;  lda SCRATCH
-  lda stackaccess
-  sta (DP)
-  ldy #1
-;  lda SCRATCH+1
-  lda stackaccess+1
-  sta (DP),y
-
-  ;; increment DP again
-;.(
-;  clc
-;  lda DP
-;  adc #2
-;  sta DP
-;  bcc skipmsb
-;  inc DP+1
-;skipmsb
-;.)
-;
-;  jmp next
-  jmp incDPby2
-
-;nocompile
-;  jmp abortcompile
+  jmp next
 .)
+
 
 
 ;;; Implement RECURSE. This is an immediate word, and uses CWORD
@@ -4577,10 +4541,7 @@ tickproceed
   ;; with that value. If not, leave it on the stack.
   lda STATE
   beq nocompile
-
-  ;; compiling (note code shared with interpreter BUG COMBINE)
-  jsr compilelit
-
+  jsr compilelit    ; compile in LIT + value
 nocompile
 done
   jmp next
@@ -4902,11 +4863,11 @@ dotuck
 ;;; In Forth, the byte count is on the top of the stack and the base
 ;;; address underneath; the monitor looks for them the other way around.
 ;;; So to a swap before calling the routine.
-dodump
-  jsr crlf
-  jsr swap16
-  jsr DUMP
-  jmp next
+;dodump
+;  jsr crlf
+;  jsr swap16
+;  jsr DUMP
+;  jmp next
 
 
 ;;; implements COUNT -- take a pointer to a counted string on the stack,
@@ -5859,9 +5820,7 @@ swap32
   rts
 
 
-;;; BUG not at all sure about this yet... in particular, it might
-;;; work from the interpreter but entirely fail inside a defined
-;;; word
+;;; Implements EXECUTE. execute the code indicated by the XT on the stack.
 doexecute
   lda stackbase+1,x ; reset XT (W) to the address signalled on the stack
   sta XT
@@ -6433,8 +6392,6 @@ return
 ;; WORD. Potentially refills the input. In the new model, IPTR
 ;; always points to the next character to be read, from whichever
 ;; input buffer we're using.
-;; BUG MAY FAIL TO PROCESS LAST CHARACTER/FIRST CHARACTER IN BUFFER
-;; PROPERLY ESPECIALLY IF DURING WORD/SPACE TRANSITION?
 readnext
   ldy #0
 lookforword
@@ -6737,7 +6694,7 @@ done
   plx               ; restore X
 
   ;; normally, we would update the IP here, but we're going to reset
-  ;; it when we do the warm start anyway (BUG IS THIS RIGHT?)
+  ;; it when we do the warm start anyway
   bra abort         ; could just fall throught but this is safer
 
 ;;; Implements ABORT. On error, resets and returns to interpreter.
@@ -6842,7 +6799,7 @@ doload
   jmp abortusing
 continue
 .)
-  ;; BUG should check that the block is scope
+  ;; BUG should check that the block number is in scope
   lda stackbase+1,x
   pha               ; stash the block number for a moment
   jsr blocksub      ; find/load the block, leave address on stack
@@ -7273,7 +7230,6 @@ mountsub
   lda #$FF          ; reset USEBASE. Top byte should always be zero,
   sta USEBASE+3     ; so FF signals invalid.
 
-  ;; BUG should test for card present
   jsr resetsd
   jsr cmd0
   cmp #1
@@ -10248,33 +10204,6 @@ flushbuf
   jsr sdsavefrommem
   ;; BUG NOT CHECKING ERRORS
 
-;  ;; copy first 256 bytes
-;.(
-;  ldy #0
-;copyloop
-;  lda (SCRATCH+2),y
-;  sta LBLOCK,y
-;  iny
-;  bne copyloop
-;.)
-;
-;  inc SCRATCH+3     ; move forward by 256 bytes
-;
-;  ;; copy second 256 bytes
-;.(
-;  ldy #0
-;copyloop
-;  lda (SCRATCH+2),y
-;  sta HBLOCK,y
-;  iny
-;  bne copyloop
-;.)
-;
-;  ;; write first sector. removes address from the stack.
-;  jsr sdsavebuf
-;  bcs endflush
-;
-
   ;; add one to the sector number on the stack
   clc
   lda stackbase+1,x
@@ -10296,34 +10225,6 @@ flushbuf
   lda SCRATCH+3
   adc #2            ; 512 bytes after previous
   sta stackbase+2,x
-
-;  ;; copy data for second sector from buffer to I/O space
-;  inc SCRATCH+3     ; first, bump the source pointer
-;
-;  ;; copy first 256 bytes
-;.(
-;  ldy #0
-;copyloop
-;  lda (SCRATCH+2),y
-;  sta LBLOCK,y
-;  iny
-;  bne copyloop
-;.)
-;
-;  inc SCRATCH+3     ; move forward by 256 bytes
-;
-;  ;; copy second 256 bytes
-;.(
-;  ldy #0
-;copyloop
-;  lda (SCRATCH+2),y
-;  sta HBLOCK,y
-;  iny
-;  bne copyloop
-;.)
-;
-;  ;; write second sector
-;  jsr sdsavenext
 
   jsr sdsavefrommem
   ;; BUG NOT CHECKING ERRORS
@@ -10432,42 +10333,6 @@ loadit
   ;; so now, stackbase+1/2 is the buffer address.
   ;; stackbase+3/4 is the block number that was passed in.
 
-;  ;; copy into the buffer
-;  lda stackbase+1,x ; SCRATCH+2/3 hold destination pointer
-;  sta SCRATCH+2     ; initially, the buffer pointer
-;  lda stackbase+2,x
-;  sta SCRATCH+3
-;
-;  lda #<LBLOCK      ; SCRATCH+4/5 hold the source pointer
-;  sta SCRATCH+4     ; initially, LBLOCK
-;  lda #>LBLOCK
-;  sta SCRATCH+5
-;
-;.(
-;  ldy#0
-;copyloop
-;  lda (SCRATCH+4),y
-;  sta (SCRATCH+2),y
-;  iny
-;  cpy #0
-;  bne copyloop
-;.)
-;
-;  inc SCRATCH+3     ; bump destination pointer to next page
-;  lda #<HBLOCK      ; switch source pointer to HBLOCK
-;  sta SCRATCH+4
-;  lda #>HBLOCK
-;  sta SCRATCH+5
-;.(
-;  ldy#0
-;copyloop
-;  lda (SCRATCH+4),y
-;  sta (SCRATCH+2),y
-;  iny
-;  cpy #0
-;  bne copyloop
-;.)
-
   ;; retreive the sector number, add one, add put the value on the stack
   jsr open2cells
   pla
@@ -10511,37 +10376,6 @@ loadit
   jsr sdloadtomem
 
   ;; BUG ought to test for load error here...
-
-;  inc SCRATCH+3     ; bump destination pointer to next page
-;  lda #<LBLOCK      ; set source pointer back to LBLOCK
-;  sta SCRATCH+4
-;  lda #>LBLOCK
-;  sta SCRATCH+5
-;
-;.(
-;  ldy#0
-;copyloop
-;  lda (SCRATCH+4),y
-;  sta (SCRATCH+2),y
-;  iny
-;  cpy #0
-;  bne copyloop
-;.)
-;
-;  inc SCRATCH+3     ; bump destination pointer to next page
-;  lda #<HBLOCK      ; and source pointer to HBLOCK
-;  sta SCRATCH+4
-;  lda #>HBLOCK
-;  sta SCRATCH+5
-;.(
-;  ldy#0
-;copyloop
-;  lda (SCRATCH+4),y
-;  sta (SCRATCH+2),y
-;  iny
-;  cpy #0
-;  bne copyloop
-;.)
 
   ;; now that we've successfully loaded the data,
   ;; update the block number in the buffer header
