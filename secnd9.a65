@@ -168,6 +168,8 @@ LIMIT=FIRST+BUFFERSPACE
 
 #ifdef ROM
   ;; jump table for use by RAM-resident programs
+  jmp puta
+  jmp readchar
   jmp printvecstr
   jmp sdloadtomem
 #endif
@@ -11559,9 +11561,9 @@ doneadd
 puta
 .(
   pha
+  lda #$10
 wait_txd_empty
-  lda ACIA_STATUS
-  and #$10
+  bit ACIA_STATUS
   beq wait_txd_empty
   pla
   sta ACIA_DATA
@@ -12238,9 +12240,12 @@ printvecstr
   ldy #0
 .(
 next_char
+  lda #$10
 wait_txd_empty  
-  lda ACIA_STATUS
-  and #$10
+;  lda ACIA_STATUS
+;  and #$10
+;  beq wait_txd_empty
+  bit ACIA_STATUS
   beq wait_txd_empty
   lda (PRINTVEC),y
   beq endstr
@@ -12373,7 +12378,7 @@ matchloop
   lda (SCRATCH),y
   sta SCRATCH+3
 
-  clc
+  clc               ; increment SCRATCH to point at command string
   lda SCRATCH
   adc #2
   sta SCRATCH
@@ -12404,14 +12409,13 @@ success
   inc SCRATCH+1
 skip2
   phy
-  ldy #1
+  ldy #1            ; put destination address in SCRATCH+11,12
   lda (SCRATCH)
   sta SCRATCH+11
   lda (SCRATCH),y
   sta SCRATCH+12
   ply
-  ;; do the jsr
-  jsr indjsr
+  jsr indjsr        ; jsr indirectly to addr in SCRATCH+11,12
   bra cmdloop
 matchfail
   lda SCRATCH+2
@@ -12467,7 +12471,9 @@ endword
   clc
   jsr loadfilesub
   bcs error
+  phx               ; save the stack pointer
   jsr $0300         ; run the loaded code
+  plx               ; restore the stack pointer
   jmp cmdloop
 
 error
@@ -12509,8 +12515,8 @@ dmgo
   jsr paramtoword
   jsr wordtonum     ; leaves result on stack
 go2
-  jsr pop16
-  lda stackaccess
+  jsr pop16         ; take address off stack and store in
+  lda stackaccess   ; SCRATCH+11,12 (the indirect jsr address)
   sta SCRATCH+11
   lda stackaccess+1
   sta SCRATCH+12
