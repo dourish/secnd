@@ -98,6 +98,7 @@ BASE=$000A          ; and 000B (store two bytes but we only use lower)
 USEBLKS=$000D       ; one byte only, block count of USING file
 ; leave $000E and $000F clear...
 IPTR=$0020          ; and 0021 (input pointer)
+; hold 0030-003F for XMODEM code
 NEXTSECTOR=$0040    ; through $0043 -- next sector to be read in stream
 FILESIZE=$0044      ; through $0047 -- size of file in stream
 READSIZE=$0048      ; through $004B -- how much data still to read
@@ -172,6 +173,10 @@ LIMIT=FIRST+BUFFERSPACE
   jmp readchar
   jmp printvecstr
   jmp sdloadtomem
+  jmp sdsavegen
+  jmp newfilesub
+  jmp finddirword
+  jmp printstacksub
 #endif
 
 
@@ -1836,10 +1841,14 @@ dummyexit
 coldstart
 
 #ifdef ROM
-  ;; initialize ACIA
-  lda #%00001011                ;No parity, no echo, no interrupt
+;  ldx #255
+;  txs               ; initialize the hardware stack
+;  cld               ; clear decimal mode
+
+  ;; configure the ACIA
+  lda #%00001011    ; no parity, no echo, no interrupt
   sta ACIA_COMMAND
-  lda #%00011111                ;1 stop bit, 8 data bits, 19200 baud
+  lda #%00011111    ; 1 stop bit, 8 data bits, 19200 baud
   sta ACIA_CONTROL
 #endif
 
@@ -8009,6 +8018,31 @@ sdsavegen
   jsr close2cells   ; leaves only cluster double on stack
   jsr cltosector    ; convert cluster to sector number
 
+  ;; if offset is > 512, we have to add offset DIV 512 to the
+  ;; sector number and then reduce offset to offset MOD 512.
+  lda SCRATCH+15
+  and #254
+  beq phase1
+
+  lsr
+  clc
+  adc stackbase+1,x
+  sta stackbase+1,x
+  lda stackbase+2,x
+  adc #0
+  sta stackbase+2,x
+  lda stackbase+3,x
+  adc #0
+  sta stackbase+3,x
+  lda stackbase+4,x
+  adc #0
+  sta stackbase+4,x
+
+  lda SCRATCH+15    ; for MOD 512, mask off upper bits
+  and #1
+  sta SCRATCH+15
+
+
 ;;; phase 1
 ;;; write the partial sector at the start of the write block
 ;;; if offset is a multiple of 512, there's nothing to do here.
@@ -8017,12 +8051,12 @@ sdsavegen
 ;;; that block first
 ;;; take offset and mask off bottom nine bits
 phase1
+
   lda SCRATCH+14
   sta SCRATCH+6
   lda SCRATCH+15
   and #1
   sta SCRATCH+7     ; S+6/7 is offset mod 512
-
   ora SCRATCH+6     ; if both are zero, nothing to process
   bne continue
   jmp phase2
@@ -8038,22 +8072,8 @@ continue
 
   ;; which block to load? take base sector number then
   ;; add offset div 512 to get sector to load
+  ;; (BUT WE HAVE ALREADY DONE THIS NOW)
 
-  lda SCRATCH+15    ; MSB of offset
-  lsr               ; shift right once to div by 512
-  clc               ; bit 0 was shifted into carry
-  adc stackbase+1,x ; add directly to sector address
-  sta stackbase+1,x
-  lda stackbase+2,x
-  adc #0
-  sta stackbase+2,x
-  lda stackbase+3,x
-  adc #0
-  sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
-  
   ;; load block into default buffer
 tag1
   jsr sdloadbuf
@@ -8084,6 +8104,7 @@ tag1
 
   ;; push count. this is the lower of the total count
   ;; or the calculated count, so check that first.
+  ;; (WHY IS THIS NOT JUST ALWAYS S+6/7?)
   sec
   lda SCRATCH+12
   sbc SCRATCH+6
@@ -8175,7 +8196,6 @@ tag3
 
   ;; decrement number of blocks by 1
   dec SCRATCH+6
-
   bne ph2loop       ; loop while more to do
 
   ;; set count to count mod 512
@@ -8214,6 +8234,7 @@ tag4
   ;; push destaddr
   dex
   dex
+  clc
   lda #<LBLOCK
   sta stackbase+1,x
   lda #>LBLOCK
@@ -9138,9 +9159,9 @@ continue
 .)
   jmp next
 
-dofreefat
-  jsr findfreecluster
-  jmp next
+;dofreefat
+;  jsr findfreecluster
+;  jmp next
 
 
 ;;; find first free cluster on the disk by searching the FAT
