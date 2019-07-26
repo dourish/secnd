@@ -177,6 +177,7 @@ LIMIT=FIRST+BUFFERSPACE
   jmp newfilesub
   jmp finddirword
   jmp printstacksub
+  jmp sdsavebuf
 #endif
 
 
@@ -6567,6 +6568,7 @@ moredata
   lda READSIZE+2
   bne skipsentinel
   lda READSIZE+1
+  beq needsentinel
   cmp #1
   bne skipsentinel
 needsentinel
@@ -6838,14 +6840,6 @@ continue
   inx
   jmp next
 
-;douse
-;  dex
-;  dex
-;  lda #<USE
-;  sta stackbase+1,x
-;  lda #>USE+1
-;  sta stackbase+2,x
-;  jmp next
 
 dospat
   dex
@@ -6855,15 +6849,6 @@ dospat
   stz stackbase+2,x
   jmp next
 
-
-;doconvert
-;  jsr buffersub
-;  lda stackbase+1,x
-;  sta TEXTBASE
-;  lda stackbase+2,x
-;  sta TEXTBASE+1
-;  jsr nulltospace
-;  jmp next
 
 
 ;;; implements MOVE
@@ -8545,7 +8530,7 @@ continue
   ;; actually 512 bytes.
   ;; BUG we ignore anything over 32k for the file size
 
-  jsr crlf
+  ;jsr crlf
 
 typeblock
 .(
@@ -8630,7 +8615,7 @@ nextblock
   jmp typeblock
 
 endshow
-  jsr crlf
+;  jsr crlf
   clc
   rts
 
@@ -12518,18 +12503,28 @@ dmmount
 
 dmshow
   jsr paramtoword
-  jmp showsub       ; doing the jump saves us an RTS
+  jsr showsub
+.(
+  bcc continue      ; error reported?
+  lda #<dmnofilestr
+  sta PRINTVEC
+  lda #>dmnofilestr
+  sta PRINTVEC+1
+  jmp printvecstr   ; jmp saves an rts
+continue
+.)
+  rts
 
+dmnofilestr .byte "No such file", $0a, $0d, $00
 
 dmhelp
   lda #<dmhelpstr
   sta PRINTVEC
   lda #>dmhelpstr
   sta PRINTVEC+1
-  jsr printvecstr
-  jmp crlf          ; doing the jump saves us an RTS
+  jmp printvecstr   ; jmp saves an rts
 
-dmhelpstr .byte "mount, dir, show <file>, xreceive <addr>, go <addr>, forth, help", $00
+dmhelpstr .byte "mount, dir, show <file>, xreceive <addr>, go <addr>, forth, help", $0a, $0d, $00
 
 
 dmgo
