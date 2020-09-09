@@ -45,6 +45,8 @@ mechanisms to bring them more into line with standard FORTH practice.
 v09 is the current version, which has involved some more work on
 arithmetic routines, tightening the code to save space, expanding the
 FAT16 code, and shaping up a version that I can happily embed in a ROM.
+It also adds a jump table so that I can call ROM routines easily from
+other programs.
 
 Finally, I'm really just using github as a convenient repository
 and backup. The code may work for others but I've not done any of

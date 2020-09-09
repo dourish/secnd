@@ -409,6 +409,7 @@ d25entry
   .byte "!"
 d25link
   .word d24entry
+dostorecode
 d25code
   .word dostore
 
@@ -1042,6 +1043,7 @@ d103entry
   .byte "fill"
 d103link
   .word d102entry
+dofillcode
 d103code
   .word dofill
 
@@ -1127,19 +1129,19 @@ d113link
 d113code
   .word abort
 
-;d114entry
-;  .byte 6
-;  .byte "upload"
-;d114link
-;  .word d113entry
-;d114code
-;  .word doupload
+d114entry
+  .byte 5
+  .byte "value"
+d114link
+  .word d113entry
+d114code
+  .word dovalue
 
 d115entry
   .byte 6
   .byte "delete"
 d115link
-  .word d113entry
+  .word d114entry
 d115code
   .word dodelete
 
@@ -1742,7 +1744,6 @@ d188link
 d188code
   .word dosdsave
 
-dtop
 dlimitentry
   .byte 5
   .byte "limit"
@@ -1750,6 +1751,51 @@ dlimitentry
 dlimitcode
   .word doloadconst
   .word LIMIT
+
+dtoentry
+  .byte IMM+2
+  .byte "to"
+  .word dlimitentry
+dtocode
+  .word doto
+
+dleftbrentry
+  .byte IMM+1
+  .byte "["
+  .word dtoentry
+dleftbrcode
+  .word doleftbr
+
+drightbrentry
+  .byte IMM+1
+  .byte "]"
+  .word dleftbrentry
+drightbrcode
+  .word dorightbr
+
+dliteralentry
+  .byte CPO+IMM+7
+  .byte "literal"
+  .word drightbrentry
+  .word doliteral
+
+deraseentry
+  .byte 5
+  .byte "erase"
+  .word dliteralentry
+  .word dolist
+  .word dolitcode
+  .word 0
+  .word dofillcode
+  .word exitcode
+
+dtop
+dbrtickentry
+  .byte IMM+3
+  .byte "[']"
+  .word deraseentry
+  .word dotick      ; tick is compiler-aware
+
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -2223,9 +2269,11 @@ dopick
   inc
   adc stackaccess
   sta stackaccess
-  lda stackaccess+1
-  adc #0
-  sta stackaccess+1
+.(
+  bcc skip
+  inc stackaccess+1
+skip
+.)
 
   dex
   dex
@@ -2501,9 +2549,14 @@ cslitsub
   clc              ; bump IP past the string constant
   adc IP
   sta IP
-  lda IP+1
-  adc #0
-  sta IP+1
+.(
+  bcc skip
+  inc IP+1
+skip
+.)
+;  lda IP+1
+;  adc #0
+;  sta IP+1
 
   rts
 
@@ -2645,6 +2698,22 @@ skipmsb
   jmp next
 
 
+;;; code for VALUE -- a cross between variable and constant
+dovalue
+  clc               ; indicates we want create to update DT
+  jsr createsub     ; use CREATE to set up new dictionary entry
+
+  ;; set code to dovaddr
+  dex
+  dex
+  lda #<doloadconst
+  sta stackbase+1,x
+  lda #>doloadconst
+  sta stackbase+2,x
+  jsr commasub      ; compiles code address
+  jsr commasub      ; take value off stack, compile it as value of value
+  jmp next
+
 
 ;;; create a new entry in the dictionary using the next word given
 ;;; in the input stream. This relies on createsub to do much of the
@@ -2742,6 +2811,75 @@ doconstant
   jsr commasub      ; now compile constant from stack
 
   jmp next
+
+
+;;; TO reads a name, resolves it to a VALUE, and updates the value
+;;; stored there to the number on the stack
+doto
+  jsr readnext
+  jsr dmatchword
+
+  lda DPTR+1
+  bne toproceed
+toabort
+  lda #$20
+  jsr puta
+  jsr printword
+  jmp abortnotdef
+
+toproceed
+  ;; DPTR points at the dictionary entry? find the parameter space
+  clc
+  lda (DPTR)
+  adc DPTR
+  sta SCRATCH
+  lda DPTR+1
+  adc #0
+  sta SCRATCH+1
+
+  clc
+  lda SCRATCH
+  adc #5            ; one byte for length, two for link, two for code
+  sta SCRATCH
+.(
+  bcc skip
+  inc SCRATCH+1
+skip
+.)
+
+  lda STATE
+  bit #COMPILE
+  beq nocompileto
+
+  ;; compile code to push address onto the stack
+  dex
+  dex
+  lda SCRATCH
+  sta stackbase+1,x
+  lda SCRATCH+1
+  sta stackbase+2,x
+  jsr compilelit
+
+  ;; compile in dostore
+  dex
+  dex
+  lda #<dostorecode
+  sta stackbase+1,x
+  lda #>dostorecode
+  sta stackbase+2,x
+  jsr commasub
+  jmp next
+
+nocompileto
+  ldy #1
+  lda stackbase+1,x
+  sta (SCRATCH)
+  lda stackbase+2,x
+  sta (SCRATCH),y
+  inx
+  inx
+  jmp next
+
 
 
 ;;; dohere implements "HERE" and just returns the pointer to the next
@@ -4149,14 +4287,7 @@ donemin
 ;;; implements KEY -- read a character from the terminal and
 ;;; leave its ascii value on the stack
 dokey
-.(
-wait_rxd_full    
-  lda ACIA_STATUS
-  and #$08
-  beq wait_rxd_full
-.)
-  lda ACIA_DATA
-
+  jsr readchar
   sta stackaccess
   stz stackaccess+1
   jsr push16
@@ -4670,9 +4801,14 @@ continue
   clc               ; and add to DPTR, so that it points to the link
   adc DPTR
   sta DPTR
-  lda DPTR+1
-  adc #0
-  sta DPTR+1
+.(
+  bcc skip
+  inc DPTR+1
+skip
+.)
+;  lda DPTR+1
+;  adc #0
+;  sta DPTR+1
 
   ldy #1            ; reset top of dictionary to the word preceeding
   lda (DPTR)        ; the word we are forgetting
@@ -4735,13 +4871,6 @@ done
   adc #6
   tax
   jmp next
-
-
-;;; Call into the xmodem upload code from the monitor
-;doupload
-;  jsr crlf
-;  jsr XRECV
-;  jmp next
 
 
 ;; switch input to a streaming file.
@@ -4969,15 +5098,14 @@ doaddmix
   lda stackbase+2,x ; byte #2
   adc stackbase+4,x
   sta stackbase+4,x
-  lda stackbase+5,x ; byte #3
-  adc #0
-  sta stackbase+5,x
-  lda stackbase+6,x ; byte #4
-  adc #0
-  sta stackbase+6,x
-;  inx               ; drop the single-length number
-;  inx
-;  jmp next          ; done
+.(
+  bcc skip
+  inc stackbase+5,x
+  bne skip
+  inc stackbase+6,x
+skip
+.)
+
   jmp drop1cell
 
 
@@ -5195,9 +5323,11 @@ testsigns16
   clc
   adc #1
   sta stackbase+1,x
-  lda stackbase+2,x
-  adc #0
-  sta stackbase+2,x
+.(
+  bcc skip
+  inc stackbase+2,x
+skip
+.)
 
 checkother
   lda stackbase+4,x
@@ -5240,9 +5370,14 @@ absmix              ; alternative entry point
   clc
   adc #1
   sta stackbase+1,x
-  lda stackbase+2,x
-  adc #0
-  sta stackbase+2,x
+.(
+  bcc skip
+  inc stackbase+2,x
+skip
+.)
+;  lda stackbase+2,x
+;  adc #0
+;  sta stackbase+2,x
 
 checkother
   lda stackbase+6,x
@@ -5261,15 +5396,12 @@ checkother
   clc
   adc #1
   sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
-  lda stackbase+5,x
-  adc #0
-  sta stackbase+5,x
-  lda stackbase+6,x
-  adc #0
-  sta stackbase+6,x
+  bcc done
+  inc stackbase+4,x
+  bne done
+  inc stackbase+5,x
+  bne done
+  inc stackbase+6,x
 done
   rts
 .)
@@ -6120,15 +6252,6 @@ dolatest
   sta stackbase+2,x
   jmp next
 
-;;; implement STATE (leave address of STATE variable on stack)
-;dostate
-;  dex
-;  dex
-;  lda #<STATE
-;  sta stackbase+1,x
-;  lda #>STATE
-;  sta stackbase+2,x
-;  jmp next
 
 
 ;;;
@@ -6525,7 +6648,20 @@ terminal
   jsr cprompt       ; different prompt to say we're still compiling
   bra afterprompt
 usualprompt
-  jsr okcrlf        ; signal completion
+  txa
+  bmi noerr      ; top bit of FORTH stack pointer should be set
+  lda #<stackerrstr
+  sta PRINTVEC
+  lda #>stackerrstr
+  sta PRINTVEC+1
+  jsr printvecstr
+noerr
+  lda #<ok
+  sta PRINTVEC
+  lda #>ok
+  sta PRINTVEC+1
+  jsr printvecstr
+  bra afterprompt
 afterprompt
   jsr readtermline  ; read another line of text
   lda #<INPUT       ; set input pointer to the text input area
@@ -6608,19 +6744,19 @@ skipsentinel
 skipzero
 
   ;; update next block pointer
+.(
   clc
   lda NEXTSECTOR
   adc #1
   sta NEXTSECTOR
-  lda NEXTSECTOR+1
-  adc #0
-  sta NEXTSECTOR+1
-  lda NEXTSECTOR+2
-  adc #0
-  sta NEXTSECTOR+2
-  lda NEXTSECTOR+3
-  adc #0
-  sta NEXTSECTOR+3
+  bcc skip
+  inc NEXTSECTOR+1
+  bne skip
+  inc NEXTSECTOR+2
+  bne skip
+  inc NEXTSECTOR+3
+skip
+.)
 
   ;; reset IPTR
   lda #<LBLOCK
@@ -7207,7 +7343,7 @@ domount
   jmp abortnodisk
 continue
   jsr mountsub
-  beq done
+  bcc done
   jmp abortcardfail
 done
   jmp next
@@ -7238,7 +7374,7 @@ continue
   jsr cmd8
   ;; BUG test the response
 
-  lda #100           ; going to try this up to 100 times
+  lda #200           ; going to try this up to 200 times
   sta SCRATCH
 
 repeat55
@@ -7251,7 +7387,7 @@ repeat55
 
   dec SCRATCH
   bne repeat55
-  sec
+  sec               ; carry signals an error
   bra donemount
 
 success
@@ -7299,6 +7435,7 @@ next_char
   bne next_char
 .)
 
+  clc               ; carry signals error, so clear
 donemount
   rts
 .)
@@ -8009,19 +8146,19 @@ sdsavegen
   and #254
   beq phase1
 
+.(
   lsr
   clc
   adc stackbase+1,x
   sta stackbase+1,x
-  lda stackbase+2,x
-  adc #0
-  sta stackbase+2,x
-  lda stackbase+3,x
-  adc #0
-  sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
+  bcc skip
+  inc stackbase+2,x
+  bne skip
+  inc stackbase+3,x
+  bne skip
+  inc stackbase+4,x
+skip
+.)
 
   lda SCRATCH+15    ; for MOD 512, mask off upper bits
   and #1
@@ -8484,6 +8621,8 @@ showsub
   rts
 continue
 .)
+  jsr crlf
+
   ;; grab the pointer to the data
   lda stackbase+1,x
   sta SCRATCH
@@ -9002,6 +9141,7 @@ done
   rol stackbase+4,x
 
   ;; add 545 ( = 512+33 = 2*256 + 33)
+.(
   clc
   lda stackbase+1,x
   adc #33
@@ -9009,12 +9149,12 @@ done
   lda stackbase+2,x
   adc #2
   sta stackbase+2,x
-  lda stackbase+3,x
-  adc #0
-  sta stackbase+3,x
-  lda stackbase+4,x
-  adc #0
-  sta stackbase+4,x
+  bcc skip
+  inc stackbase+3,x
+  bne skip
+  inc stackbase+4,x
+skip
+.)
 
   rts
 
@@ -10604,7 +10744,17 @@ doneadd
   rts
 .)
 
+doliteral
+  jsr compilelit
+  jmp next
 
+doleftbr
+  stz STATE
+  jmp next
+
+dorightbr
+  inc STATE
+  jmp next
 
 
 ;;;
@@ -11577,11 +11727,6 @@ wait_txd_empty
   rts
 
 okcrlf
-  lda #<ok
-  sta PRINTVEC
-  lda #>ok
-  sta PRINTVEC+1
-  jsr printvecstr
   rts
 
 cprompt
@@ -12248,9 +12393,6 @@ printvecstr
 next_char
   lda #$10
 wait_txd_empty  
-;  lda ACIA_STATUS
-;  and #$10
-;  beq wait_txd_empty
   bit ACIA_STATUS
   beq wait_txd_empty
   lda (PRINTVEC),y
@@ -12370,6 +12512,9 @@ cmdloop
   jsr puta
   jsr readtermline
   jsr crlf
+
+  lda INPUT         ; if the line is empty then ignore it
+  beq cmdloop
 
 startmatch
   lda #<dmtable
@@ -12497,8 +12642,19 @@ dmmount
   jsr puta
   lda #"D
   jsr puta
+mountloop
   jsr mountsub
+  bcc endmount      ; finish if all fine
+  lda #<notinitmsg  ; otherwise, note that no disk mounted
+  sta PRINTVEC
+  lda #>notinitmsg
+  sta PRINTVEC+1
+  jsr printvecstr
+endmount
   jmp crlf          ; JMP saves an RTS
+
+detectedmsg .byte "SD card detected", $0d, $0a, $00
+notinitmsg  .byte " not initialized", $00
 
 
 dmshow
@@ -12714,15 +12870,16 @@ checksumok
   jsr puta
 
   ;; update the destination address by 128 ($80)
-  lda #$80
   clc
-  adc XDESTADDR
+  lda XDESTADDR
+  adc #$80
   sta XDESTADDR
-  lda XDESTADDR+1
-  adc #0
-  sta XDESTADDR+1
+.(
+  bcc skip
+  inc XDESTADDR+1
+skip
+.)
   ;; and loop for next block
-
   bra nextxblock
 
 ;; Send an ACK. Pause briefly to allow the connection to be torn down.
@@ -12757,24 +12914,23 @@ busywait
   jsr printvecstr
   jsr crlf
   jmp endxmodem
+.)
 
 xmerror
+  ;; I'd like to report an error here but if the connection is still
+  ;; open it will just go to that rather than to the screen!
 
 endxmodem
   plx               ; restore operand stack pointer in x
   rts
-.)
 
 
 ;; get a character from the serial port
 ;;
 getserial
-.(
-wait_rxd_full    
   lda ACIA_STATUS
   and #$08
-  beq wait_rxd_full
-.)
+  beq getserial
   lda ACIA_DATA
   rts
 
@@ -12786,7 +12942,7 @@ checksumerror
   sta PRINTVEC+1
   jsr printvecstr
   jsr crlf
-  rts
+  jmp endxmodem
 
 headererror
   lda #<headerrstr
@@ -12795,7 +12951,7 @@ headererror
   sta PRINTVEC+1
   jsr printvecstr
   jsr crlf
-  rts
+  jmp endxmodem
 
 blockcounterror
   lda #<blockerrstr
@@ -12804,7 +12960,7 @@ blockcounterror
   sta PRINTVEC+1
   jsr printvecstr
   jsr crlf
-  rts
+  jmp endxmodem
 
 startstr:   .byte "xmodem listening", $00
 recvdstr:   .byte "xmodem received", $00
@@ -12833,7 +12989,6 @@ notdefinedmsg:   .byte ": not defined", $00
 nestingmsg:	 .byte "  nesting mismatch", $00
 compileerr:      .byte "  compile-only word", $00
 exitmsg:	 .byte $0d, $0a, $0d, $0a, "Exiting.", $0d, $0a, $00
-;timeoutmsg:      .byte " timeout", $0d, $0a, $00
 cardfailmsg:     .byte " couldn't initialize card", $00
 initializedmsg:  .byte " initialized ", $00
 usingerrormsg:   .byte " not USING block file", $00
@@ -12847,4 +13002,5 @@ blockcountmsg:   .byte " exceeds file block count", $00
 generic:	 .byte " generic error",$00
 existserr:	 .byte " file exists",$00
 bytesfree:       .byte " bytes free", $00
+stackerrstr:	 .byte " stack over/underflow", $00
 hextable:	 .byte "0123456789ABCDEF"
