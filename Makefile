@@ -3,7 +3,7 @@ MKHEX=mkhex
 MKROM=mkrom
 
 %.x65: %.a65
-	$(XA) -l `basename $< .a65`.lab -o $@ $<
+	$(XA) -M -l `basename $< .a65`.lab -o $@ $<
 
 %.hex: %.x65
 	$(MKHEX) $< > $@

@@ -44,7 +44,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$3D00
+USERBASE=$4300
 #endif
 
 ;;;
@@ -1904,6 +1904,9 @@ coldstart
 
   ;; initialize stack...
   jsr initstack
+
+  ;; initialize video port
+  jsr ra8875init
 
 #ifdef DISKMAN
   jmp startdiskman
@@ -8494,6 +8497,8 @@ header
   sta PRINTVEC+1
   jsr printvecstr
 
+  ;; print the name of the disk volume
+  ;;
   ldy #0
 .(
 loop
@@ -11727,22 +11732,24 @@ doneadd
 ;;;
 
 puta
-.(
-  pha
-  lda #$10
-wait_txd_empty
-  bit ACIA_STATUS
-  beq wait_txd_empty
-  pla
-  sta ACIA_DATA
-.)
+;.(
+;  pha
+;  lda #$10
+;wait_txd_empty
+;  bit ACIA_STATUS
+;  beq wait_txd_empty
+;  pla
+;  sta ACIA_DATA
+;.)
+  jsr vputa
   rts
 
 crlf
-  lda #13
-  jsr puta
-  lda #10
-  jsr puta
+;  lda #13
+;  jsr puta
+;  lda #10
+;  jsr puta
+  jsr vcrlf
   rts
 
 
@@ -12398,7 +12405,8 @@ wait_txd_empty
   beq wait_txd_empty
   lda (PRINTVEC),y
   beq endstr
-  sta ACIA_DATA
+;  sta ACIA_DATA
+  jsr vputa
   iny
   bra next_char
 endstr
@@ -13005,3 +13013,1107 @@ existserr:	 .byte " file exists",$00
 bytesfree:       .byte " bytes free", $00
 stackerrstr:	 .byte " stack over/underflow", $00
 hextable:	 .byte "0123456789ABCDEF"
+
+
+;;;
+;;; Video code here
+;;;
+
+;;;
+;;; Basic video support using RA8875 board connected via 6522. This is
+;;; cut down from my test harness to slim back to core functions needed
+;;; for FORTH.
+;;;
+;;; Paul Dourish, July 2021
+;;;
+
+UVIA_PORTB = $8010
+UVIA_PORTA = $8011
+UVIA_DDRB  = $8012
+UVIA_DDRA  = $8013
+
+SPI_PORT   = UVIA_PORTB
+
+
+;; Command/Data codes for SPI
+DATAWRITE=$00
+DATAREAD=$40 
+CMDWRITE=$80 
+CMDREAD =$C0  
+
+;;;
+;;; Include standard startup code
+;;;
+
+;;; also include all the RA8875-specific definitions
+#include "../mitemon/apps/spivdefs.a65"
+
+#include "../mitemon/apps/delay.a65"
+
+
+;;;
+;;; SECTION 1: Low-level SPI code
+;;;
+;;;
+
+;;;
+;;; Wiring details:
+;;;   CLK is PB0, ie 1
+;;;   MOSI is PB1, ie 2
+;;;   CS is PB2, ie 4
+;;;   MISO is PB7, which maps onto S flag on BIT (test with BPL and BMI)
+;;; MISO, MOSI, and CS all have pull-up resisters, so they are high in
+;;; the idle/unused state, except when pulled low by active circuitry.
+;;;
+;;; For the moment, this is the same setup as the SD card reader.
+;;; Since I want to be able to set things up for keyboard input on
+;;; on the same port, I'm likely to want to move some of the lines
+;;; around later. However, for now, I wannt to use validated code.
+;;;
+;;; Other bits:
+;;;    BACKLIGHT  PB3, ie 8
+;;;    BUSY       PB4, ie 16
+;;;    RESET      PB5, ie 32
+;;;
+;;; Device is SPI Mode 0. This means:
+;;;   clock idles low
+;;;   clock active high
+;;;   data read on rising edge
+
+SPI_CLK  = 1
+SPI_MOSI = 2
+SPI_CS   = 4
+LIGHT    = 8
+SPI_MISO = 128
+BUSYMASK = 16
+RESET    = 32
+
+;;; set up data direction for SPI_PORT -- bits 0, 1, 2, 3, and 5 are
+;;; outputs and bits 4, 6 (NC), and 7 are inputs.
+vidconf6522
+  lda #$2f
+  sta UVIA_DDRB
+  lda #SPI_MOSI|RESET|SPI_CS
+  sta SPI_PORT
+  rts
+
+
+;;; Send a byte via SPI. This faster version of the original code
+;;; unrolls the loop and relies on shifts rather than branches to
+;;; determine the bit to send. This is written on the assumption
+;;; that the CLK signal idles low.
+;;;
+vsendbyte
+  phy
+  ;tay               ; y will store the data as we transmit it
+
+; bit 7
+  ;tya
+  asl               ; moves bit to transmit into C (2 cycles)
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #2            ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+  ;; NOTE used to have "dec SPI_PORT" right after the inc but I
+  ;; moved it down to even out the duty cycle. I strongly suspect
+  ;; that this is completely irrelevant. Once everything is working,
+  ;; try moving it back since the code reads better in its original
+  ;; configuration.
+
+; bit 6
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 5
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 4
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 3
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 2
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 1
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+; bit 0
+  tya               ; get remaining data from Y (2 cycles)
+  asl               ; moves bit to transmit into C (2 cycles)
+  dec SPI_PORT      ; 6 cycles
+  tay               ; temporarily store in Y (2 cycles)
+  
+  ; two rotates will shift the carry into the MOSI position
+  rol               ; move transmit bit to bit 0 (2 cycles)
+  rol               ; move transmit bit to bit 1 (2 cycles)
+  and #%00000010    ; clear out other bits (2 cycles)
+  ora #RESET	    ; keep reset high!
+  sta SPI_PORT      ; 4 cycles
+  inc SPI_PORT      ; 6 cycles
+
+  ;; set MOSI high at end
+  lda #SPI_MOSI
+  tsb SPI_PORT
+
+  dec SPI_PORT      ; 6 cycles
+
+  ply
+  rts
+
+
+;;; read a byte via SPI from SPI_PORT, returned in accumulator.
+;;; Assume the CLK idles low.
+vrecv8bits
+  phx               ; store X, since we'll use it (and can't use Y)
+  lda #0            ; zero out initial result
+
+  inc SPI_PORT      ; set CLK high for first bit
+  ldx SPI_PORT      ; read data
+  cpx #128          ; this sets carry flag to top bit
+  rol               ; shift carry into A
+  dec SPI_PORT      ; set clock off
+
+  inc SPI_PORT      ; set CLK high #2
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #3
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #4
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #5
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #6
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #7
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  inc SPI_PORT      ; set CLK high #8
+  ldx SPI_PORT      ; get data into X
+  cpx #128          ; set carry flag to top bit of data
+  rol               ; roll that into the accumulator
+  dec SPI_PORT      ; set CLK low
+
+  plx               ; restore X
+  rts               ; return with data in A
+
+
+;;;
+;;; SECTION 2: Read and set RA8875 registers
+;;;
+;;;
+
+wrcommand
+  pha               ; cache value
+
+;  lda #SPI_CS       ; set CS to low
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
+  sta SPI_PORT
+
+  lda #CMDWRITE     ; send CMDWRITE
+  jsr vsendbyte
+  pla               ; retreive value
+  jsr vsendbyte      ; send it
+
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
+
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
+  rts
+
+;rdcommand
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+;
+;  ;; send CMDREAD
+;  lda #CMDREAD      ; send CMDREAD
+;  jsr sendbyte
+;  jsr getresponse   ; receive data into A
+;
+;  pha               ; cache it temporarily
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+;  pla               ; retrieve data
+;  rts
+
+wrdata
+  pha
+;  ;; set CS low
+;  lda #SPI_CS
+;  trb SPI_PORT
+  lda #RESET        ; everything low except RESET
+  ;; send DATAWRITE
+  lda #DATAWRITE
+  jsr vsendbyte
+  pla
+  ;; send A
+  jsr vsendbyte
+;  ;; set MOSI high
+;  lda #SPI_MOSI
+;  tsb SPI_PORT
+;  ;; set CS high
+;  lda #SPI_CS
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET   ; CS, MOSI, RESET high
+  sta SPI_PORT
+  rts
+
+rddata
+;  lda #SPI_CS       ; set CS low
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
+
+  lda #DATAREAD     ; send DATAREAD
+  jsr vsendbyte
+
+;  lda #SPI_MOSI     ; keep MOSI low while awaiting response
+;  trb SPI_PORT
+  lda #RESET
+  sta SPI_PORT      ; RESET high, everything else low
+
+  jsr vrecv8bits    ; get response into A
+  pha               ; cache it for a moment
+
+;  lda #SPI_MOSI     ; set MOSI high
+;  tsb SPI_PORT
+;  lda #SPI_CS       ; set CS high
+;  tsb SPI_PORT
+  lda #SPI_MOSI|SPI_CS|RESET
+  sta SPI_PORT
+
+  pla               ; retreive data
+  rts
+
+;; write value in Y to register in A
+writereg
+  jsr wrcommand
+  tya
+  jsr wrdata
+  rts
+
+readreg
+  jsr wrcommand
+  jsr rddata
+  rts
+  
+
+
+;;;
+;;; SECTION 3: Control RA8875 functions
+;;;
+;;;
+
+;;; Initialize video processor
+;;;
+vidinit
+  ;; initial setup -- CLOCK high, MOSI high, RESET high, CS high
+  lda #SPI_CLK|SPI_MOSI|RESET|SPI_CS
+  sta SPI_PORT
+
+  ;; for reset -- hold RESET, CLK, and MOSI all low
+  ;; that's basically everything except MISO, right?
+  lda #SPI_MISO
+  sta SPI_PORT
+  ;; short pause
+  jsr delay100ms
+  ;; set RESET, CLK, MOSI and CS all high
+  lda #RESET|SPI_CLK|SPI_MOSI|SPI_CS
+  sta SPI_PORT
+  jsr delay100ms
+
+  ;; now set chip select low (and leave it there)
+  lda #RESET|SPI_CLK|SPI_MOSI
+  sta SPI_PORT
+
+
+  ;; check things are okay -- read status register and confirm value
+  lda #0
+  jsr wrcommand
+  jsr rddata
+  cmp #$75
+  beq endvidinit
+fail
+;  jsr putax
+;  lda #<failstr
+;  sta PRINTVEC
+;  lda #>failstr
+;  sta PRINTVEC+1
+;  jsr printvecstr
+endvidinit  
+  rts
+
+successstr .byte "reg 0 read successful", $0a, $0d, $0
+failstr    .byte " != 0x75", $0a, $0d, $0
+
+
+;;; Initialize registers to default settings
+;;;
+reginit
+  lda #PLLC1
+  ldy #PLLC1_PLLDIV1+11
+  jsr writereg
+  jsr delay1ms
+
+  lda #PLLC2
+  ldy #PLLC2_DIV4
+  jsr writereg
+  jsr delay1ms
+
+  lda #SYSR
+  ldy #SYSR_16BPP|SYSR_MCU8
+  jsr writereg
+  jsr delay1ms
+
+  lda #PCSR
+  ldy #PCSR_PDATL|PCSR_2CLK
+  jsr writereg
+  jsr delay1ms
+
+  lda #HDWR
+  ldy #99
+  jsr writereg
+  jsr delay1ms
+
+  lda #HNDFTR
+  ldy #HNDFTR_DE_HIGH
+  jsr writereg
+  jsr delay1ms
+
+  lda #HNDR
+  ldy #3
+  jsr writereg
+  jsr delay1ms
+
+  lda #HSTR
+  ldy #3
+  jsr writereg
+  jsr delay1ms
+
+  lda #HPWR
+  ldy #HPWR_LOW+11
+  jsr writereg
+  jsr delay1ms
+
+  ;; vertical settings registers
+  lda #VDHR0
+  ldy #<479
+  jsr writereg
+  jsr delay1ms
+
+  lda #VDHR1
+  ldy #>479
+  jsr writereg
+  jsr delay1ms
+
+  lda #VNDR0
+  ldy #31
+  jsr writereg
+  jsr delay1ms
+
+  lda #VNDR1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #VSTR0
+  ldy #22
+  jsr writereg
+  jsr delay1ms
+
+  lda #VSTR1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #VPWR
+  ldy #VPWR_LOW+1
+  jsr writereg
+  jsr delay1ms
+
+
+  ;; active window X
+
+  lda #HSAW0
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #HSAW1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #HEAW0
+  ldy #<799
+  jsr writereg
+  jsr delay1ms
+
+  lda #HEAW1
+  ldy #>799
+  jsr writereg
+  jsr delay1ms
+
+  ;; active window Y
+  lda #VSAW0
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #VSAW1
+  ldy #0
+  jsr writereg
+  jsr delay1ms
+
+  lda #VEAW0
+  ldy #<479
+  jsr writereg
+  jsr delay1ms
+
+  lda #VEAW1
+  ldy #>479
+  jsr writereg
+  jsr delay1ms
+
+  lda #MCLR
+  ldy #MCLR_START|MCLR_FULL
+  jsr writereg
+
+  jsr delay1s
+
+  rts
+
+;;; Turn on display and backlight
+;;;
+displayon
+
+  ;tft.displayOn(true);
+  lda #PWRR
+  ldy #PWRR_NORMAL|PWRR_DISPON
+  jsr writereg
+  
+  ; tft.GPIOX(true);      // Enable TFT - display enable tied to GPIOX
+  lda #GPIOX
+  ldy #1
+  jsr writereg
+
+  ; tft.PWM1config(true, RA8875_PWM_CLK_DIV1024); // PWM output for backlight
+  lda #P1CR
+  ldy #P1CR_ENABLE|PWM_CLK_DIV1024
+  jsr writereg
+  
+  ;tft.PWM1out(255);
+  lda #P1DCR
+  ldy #255
+  jsr writereg
+
+  rts
+
+;;; set text colors (actually, either mode) -- fg white, bg black
+;;;
+defaultcolors
+
+  ;; set foreground to white
+  lda #$63
+  ldy #$1f
+  jsr writereg
+
+  lda #$64
+  ldy #$3f
+  jsr writereg
+
+  lda #$65
+  lda #$1f
+  jsr writereg
+
+  ldy#0
+  lda #$60
+  jsr writereg
+  lda #$61
+  jsr writereg
+  lda #$62
+  jsr writereg
+  
+  ;; Clear transparency flag
+  lda #$22
+  jsr wrcommand
+  jsr rddata
+  and #%10111111    ; clear bit 6
+  jsr wrdata
+
+  rts
+
+
+VROW .byte 0
+VCOL .byte 0
+
+ra8875init
+  jsr vidconf6522   ; set up the port
+  jsr doinit        ; initialize the video board
+  jsr dotext        ; set text mode
+  jsr docursor      ; turn on cursor
+  stz VROW
+  stz VCOL
+  rts
+
+;;;
+;;; SECTION 5: Implement interpreter commands
+;;;
+;;;
+
+
+;;; Initialize the display
+;;;
+doinit
+  jsr vidinit
+  jsr reginit
+  jsr displayon
+  rts
+
+
+DLSTART=$80
+DLSTOP=$00
+DRAWSQUARE=$10
+FILL=$20
+
+;;; draw a filled rectangle, presuming that it's already all set up
+fillrect
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  jsr delay100ms
+  rts
+
+
+;;; move to the start of a new line. set horizontal position to zero, and
+;;; increment vertical position by 16. (NOTE: this presumes that we're
+;;; at text size 0.)
+;;;
+donewline
+  phy
+  ;; first, do the equivalent of a carriage return
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2b
+  jsr writereg
+  lda #$2a
+  jsr writereg
+
+  ;; second, do the equivalent of a line feed
+  lda #$2d          ; read MSB of vertical position
+  jsr readreg
+  tay               ; cache it in Y
+  lda #$2c          ; read LSB of vertial position
+  jsr readreg
+  clc
+  adc #16           ; add 16
+  pha               ; temporaily store on stack
+  tya               ; get MSB again
+  adc #0            ; process the carry
+  tay               ; write to Y
+  lda #$2d          ; write value of Y to $2d (MSB)
+  jsr writereg
+  ply               ; retreive LSB cached on stack
+  lda #$2c          ; write to LSB register
+  jsr writereg
+  ply
+  rts
+
+
+;;; set text mode, text font, text color, and text direction
+;;;
+dotext
+
+;; send command 0x40 (MWCR0 register)
+  lda #$40
+  jsr wrcommand
+
+  ;; read response
+  jsr rddata
+  ;; set bit 7
+  ora #$80
+  ;; write it back as data
+  jsr wrdata
+
+  ;; font selection
+  lda #$21
+  jsr wrcommand
+  jsr rddata
+  and #%0101111     ; clear bits 7 and 5
+  jsr wrdata
+
+  jsr defaultcolors
+
+  rts
+
+;;; Turn on hardware cursor
+;;;
+docursor
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora #MWCR0_CURSOR
+  jsr wrdata
+
+  lda #MWCR0
+  jsr wrcommand
+  jsr rddata
+  ora #MWCR0_BLINK
+  jsr wrdata
+
+  lda #BTCR
+  jsr wrcommand
+  lda #32           ; just keep tweaking until I like the result
+  jsr wrdata
+
+  rts
+
+
+;;; print a character using the video routines. keep track of column and
+;;; row in case we need to scroll.
+;;;
+;;; CAREFUL -- there are multiple exit points from this. make sure that
+;;; they always restore the stack appropriately.
+;;;
+vputa
+  cmp #$0d          ; carriage return
+  beq vcr
+  cmp #$0a          ; line feed
+  beq vlf
+  cmp #$08          ; backspace
+  beq vbs
+
+  ;; with the special cases out of the way, just display
+  ;; the character.
+  pha
+  phy
+  tay
+  lda #MRWC
+  jsr wrcommand
+  tya
+  jsr wrdata
+  ply
+  inc VCOL
+  lda VCOL          ; have we run off the end of the line?
+  cmp #100
+  bne endchar       ; no, so continue
+  stz VCOL          ; yes -- update column
+  inc VROW
+  lda VROW          ; were we on the last row
+  cmp #30
+  beq scroll        ; yes, so scroll screen up
+endchar
+  pla
+  rts
+
+;;; carriage return for video card
+vcr
+  pha
+  phy
+  stz VCOL
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2b
+  jsr writereg
+  lda #$2a
+  jsr writereg
+  ply
+  pla
+  rts
+
+;;; line feed for video card -- possibly scroll
+vlf
+  pha
+  inc VROW
+  lda VROW
+  cmp #30
+  bne noscroll
+scroll
+  jsr doscrollup  
+  lda #20
+  sta VROW
+  bra endnewline
+noscroll
+  phy               ; save Y
+  lda #$2d          ; read MSB of vertical position
+  jsr readreg
+  tay               ; cache it in Y
+  lda #$2c          ; read LSB of vertial position
+  jsr readreg
+  clc
+  adc #16           ; add 16
+  pha               ; temporaily store on stack
+  tya               ; get MSB again
+  adc #0            ; process the carry
+  tay               ; write to Y
+  lda #$2d          ; write value of Y to $2d (MSB)
+  jsr writereg
+  ply               ; retreive LSB cached on stack
+  lda #$2c          ; write to LSB register
+  jsr writereg
+  ply               ; restore Y
+endnewline
+  stz VCOL
+  pla               ; restore A
+  rts
+
+;;; backspace for video card
+;;;
+vbs
+  pha
+  ;; if we're in the first column, backspace does nothing.
+  lda VCOL
+  beq skipbs
+
+  phy               ; save Y temporarily
+  dec VCOL          ; moving back to previous column
+  ;; use VCOL to calculate correct position (VCOL * 8). use SCRATCH+1
+  ;; for the MSB
+  stz SCRATCH+1
+  lda VCOL
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  asl
+  rol SCRATCH+1
+  sta SCRATCH       ; cache it because we'll need it again in a moment
+
+  ;; reset the text cursor position
+  tay
+  lda #$2a
+  jsr writereg
+  ldy SCRATCH+1
+  lda #$2b
+  jsr writereg
+
+  ;; print a space to erase the character
+  lda #MRWC
+  jsr wrcommand
+  lda #32           ; space
+  jsr wrdata
+
+  ;; reset text position again
+  ;; reset the text cursor position
+  ldy SCRATCH
+  lda #$2a
+  jsr writereg
+  ldy SCRATCH+1
+  lda #$2b
+  jsr writereg
+
+  ply               ; restore Y
+
+skipbs
+  pla               ; restore A
+  rts
+
+
+vcrlf
+  jsr vcr
+  jsr vlf
+  rts
+
+
+;;; scrollup is basically the text scrolling function that i need
+;;; for "terminal" type interaction. Four steps -- first, some setup
+;;; that I do here so that the block transfer and then erase happen
+;;; as quickly together as possible. Then, do the block transfer to
+;;; move the bottom two thirds of the screen to the top. Next, paint
+;;; a black background in the bottom third. Finally, reset the color
+;;; and move the text position to the newly opened area.
+;;;
+doscrollup
+  phy               ; preserve Y
+
+  ;; set up for move. I do this out of line so that the actual transfer
+  ;; happens as quickly as it can. Look up the current foreground
+  ;; color, cache it on the stack, and set the foreground to black.
+  ;; look up current color values and save them
+  lda #$63
+  jsr readreg
+  pha
+
+  lda #$64
+  jsr readreg
+  pha
+
+  lda #$65
+  jsr readreg
+  pha
+
+  ;; now set color to black, ready for painting the block after the move
+  ldy #0
+  lda #$63
+  jsr writereg
+  lda #$64
+  jsr writereg
+  lda #$65
+  jsr writereg
+
+  ;; setup completed. next, do the block move.
+  ;; set up source address
+  ;; NOTE address includes layer specification. I'm setting this
+  ;; to zero, which means Layer 1. I'm not even sure right now which
+  ;; layer I'm using!
+  ldy #0            ; starting at 0, 160
+  lda #$54          ; LSB of X coordinate
+  jsr writereg
+  lda #$55          ; MSB of X coordinate
+  jsr writereg
+  ldy #$A0          
+  lda #$56          ; LSB of Y coordinate
+  jsr writereg
+  ldy #0
+  lda #$57          ; MSB of Y coordinate
+  
+
+  ;; set up destination address
+  ldy #0            ; copying to 0,0
+  lda #$58          ; LSB of X coordinate
+  jsr writereg
+  lda #$59          ; MSB of X coordinate
+  jsr writereg
+  lda #$5A          ; LSB of Y coordinate
+  jsr writereg
+  lda #$5B          ; MSB of Y coordinate
+
+  ;; set BTE width and hight
+  ldy #$20          ; width is 800 ($320)
+  lda #$5C          ; LSB of width
+  jsr writereg
+  ldy #$03
+  lda #$5D          ; MSD of width
+  jsr writereg
+
+
+  ldy #$40          ; height is 340 ($140)
+  lda #$5E          ; LSB of X coordinate
+  jsr writereg
+  ldy #$01
+  lda #$5F          ; MSD of X coordinate
+  jsr writereg
+
+  ;; set BTE function
+  ;; function is "move in a positive direction". The "positive direction"
+  ;; means that we start at the beginning and move toward the end; since
+  ;; the source and destination regions overlap, that's what we need.
+  ;; ROP is "destionation = source" (ie, straight copy).
+  ;; ROP is %1100 = $C, ROP is %0010 = $02
+  ;; result is $C2
+  ldy #$C2
+  lda #$51
+  jsr writereg
+
+  ;; enable BTE function
+  ldy #$80
+  lda #$50
+  jsr writereg
+
+  ;; wait for block transfer to complete. Read register $50 until
+  ;; the top bit is clear.
+.(
+busyloop
+  lda #$50
+  jsr readreg
+  bmi busyloop
+.)
+
+  ;; now, empty bottom third of the screen. region is from
+  ;; ($0, $140) to ($31F, $11F)
+
+  ;; set up parameters -- startx, starty, endx, endy
+  lda #$91
+  ldy #0
+  jsr writereg
+  ldy #0
+  lda #$92
+  jsr writereg
+  ldy #$40
+  lda #$93
+  jsr writereg
+  ldy #1
+  lda #$94
+  jsr writereg
+
+  lda #$95
+  ldy #$1F          ; lower byte for 799
+  jsr writereg
+  lda #$96
+  ldy #03           ; upper byte for 799
+  jsr writereg
+
+  lda #$97
+  ldy #$df          ; lower byte for 479
+  jsr writereg
+  lda #$98          
+  ldy #$01          ; upper byte for 479
+  jsr writereg
+
+  ;; do the block draw
+  lda #DCR
+  jsr wrcommand
+  
+  lda #DLSTOP|DRAWSQUARE
+  jsr wrdata
+  lda #DLSTART|FILL|DRAWSQUARE
+  jsr wrdata
+
+  ;; wait until complete
+.(
+busyloop
+  lda #$90
+  jsr readreg
+  bmi busyloop
+.)
+
+  ;; reset color. I should check if there's a way to draw a
+  ;; rectangle using the current *background* color 'cos that
+  ;; would be a lot easier!
+  pla
+  tay
+  lda #$65
+  jsr writereg
+  pla
+  tay
+  lda #$64
+  jsr writereg
+  pla
+  tay
+  lda #$63
+  jsr writereg
+
+  ;; move text cursor
+  ldy #0            ; set $2a and $2b, horizontal position, to 0
+  lda #$2a
+  jsr writereg
+  lda #$2b
+  jsr writereg
+  ldy #$40
+  lda #$2c
+  jsr writereg
+  ldy #1
+  lda #$2d
+  jsr writereg
+
+  ply               ; restore Y
+  rts
+
+
+;;; color lookup table
+;;; RA8875 uses five bits for blue, six for green, and five for red.
+;;; Rather than extract them from 16-bit values, I've just precomputed
+;;; some colors here and can use index into this table as a color value.
+;;; color 0 = black, color 8 = white, and the others are a random selection.
+colors
+  .byte $00, $00, $00    ; black
+  .byte $1F, $00, $00    ; red
+  .byte $00, $3F, $00    ; green
+  .byte $00, $00, $1F    ; blue
+  .byte $00, $3F, $1F    ; cyan
+  .byte $1F, $00, $1F    ; magenta
+  .byte $1F, $3F, $00    ; yellow
+  .byte $1F, $3F, $1F    ; white
+  .byte $0F, $1F, $0F    ; grey
+  .byte $1D, $18, $15    ; pink?
+
