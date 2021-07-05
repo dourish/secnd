@@ -44,7 +44,7 @@
 USERBASE=$0800
 #else
   * = $0300
-USERBASE=$4300
+USERBASE=$4200
 #endif
 
 ;;;
@@ -1789,13 +1789,24 @@ deraseentry
   .word dofillcode
   .word exitcode
 
-dtop
 dbrtickentry
   .byte IMM+3
   .byte "[']"
   .word deraseentry
   .word dotick      ; tick is compiler-aware
 
+dvsetentry
+  .byte 2
+  .byte "v!"
+  .word dbrtickentry
+  .word dovset
+  
+dtop
+dvfetchentry
+  .byte 2
+  .byte "v@"
+  .word dvsetentry
+  .word dovfetch
 
 ;d101entry
 ;  .byte %00100011   ; IMM plus count of three
@@ -5032,7 +5043,22 @@ docount
   jsr push16
   jmp next
 
-  
+
+;;; the next two words are for v! and v@, which set and read the video
+;;; registers on the RA8875. So this only applies to the video version
+;;;
+dovfetch
+  lda 1,x
+  jsr readreg
+  sta 1,x
+  jmp next
+
+dovset
+  lda 1,x
+  jsr wrcommand
+  lda 3,x
+  jsr wrdata
+  jmp drop2cells
 
 ;;;
 ;;; DOUBLE-LENGTH ARITHMETIC
@@ -11731,26 +11757,25 @@ doneadd
 ;;; *** USER I/O SUPPORT ROUTINES
 ;;;
 
-puta
-;.(
-;  pha
-;  lda #$10
-;wait_txd_empty
-;  bit ACIA_STATUS
-;  beq wait_txd_empty
-;  pla
-;  sta ACIA_DATA
-;.)
-  jsr vputa
+putserial
+.(
+  pha
+  lda #$10
+wait_txd_empty
+  bit ACIA_STATUS
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
   rts
 
-crlf
+;crlf
 ;  lda #13
 ;  jsr puta
 ;  lda #10
 ;  jsr puta
-  jsr vcrlf
-  rts
+;  jsr vcrlf
+;  rts
 
 
 
@@ -13016,16 +13041,15 @@ hextable:	 .byte "0123456789ABCDEF"
 
 
 ;;;
-;;; Video code here
+;;; SECTION N -- VIDEO
+;;;
+;;; Support for RA8875 video, connected via SPI. This actually has
+;;; a different SPI implementation than I use for the SD card,
+;;; for a couple of reasons, including RESET handling, although
+;;; I ought to be able to merge them at some point (or replace
+;;; them both using 65SPI).
 ;;;
 
-;;;
-;;; Basic video support using RA8875 board connected via 6522. This is
-;;; cut down from my test harness to slim back to core functions needed
-;;; for FORTH.
-;;;
-;;; Paul Dourish, July 2021
-;;;
 
 UVIA_PORTB = $8010
 UVIA_PORTA = $8011
@@ -13292,7 +13316,7 @@ vrecv8bits
 
 
 ;;;
-;;; SECTION 2: Read and set RA8875 registers
+;;; Read and set RA8875 registers
 ;;;
 ;;;
 
@@ -13439,10 +13463,6 @@ fail
 ;  jsr printvecstr
 endvidinit  
   rts
-
-successstr .byte "reg 0 read successful", $0a, $0d, $0
-failstr    .byte " != 0x75", $0a, $0d, $0
-
 
 ;;; Initialize registers to default settings
 ;;;
@@ -13651,6 +13671,8 @@ ra8875init
   jsr docursor      ; turn on cursor
   stz VROW
   stz VCOL
+;  lda #MRWC         ; always leave the RA8875 in this mode so
+;  jsr wrcommand     ; that text printing goes faster
   rts
 
 ;;;
@@ -13672,53 +13694,6 @@ DLSTART=$80
 DLSTOP=$00
 DRAWSQUARE=$10
 FILL=$20
-
-;;; draw a filled rectangle, presuming that it's already all set up
-fillrect
-  lda #DCR
-  jsr wrcommand
-  
-  lda #DLSTOP|DRAWSQUARE
-  jsr wrdata
-  lda #DLSTART|FILL|DRAWSQUARE
-  jsr wrdata
-
-  jsr delay100ms
-  rts
-
-
-;;; move to the start of a new line. set horizontal position to zero, and
-;;; increment vertical position by 16. (NOTE: this presumes that we're
-;;; at text size 0.)
-;;;
-donewline
-  phy
-  ;; first, do the equivalent of a carriage return
-  ldy #0            ; set $2a and $2b, horizontal position, to 0
-  lda #$2b
-  jsr writereg
-  lda #$2a
-  jsr writereg
-
-  ;; second, do the equivalent of a line feed
-  lda #$2d          ; read MSB of vertical position
-  jsr readreg
-  tay               ; cache it in Y
-  lda #$2c          ; read LSB of vertial position
-  jsr readreg
-  clc
-  adc #16           ; add 16
-  pha               ; temporaily store on stack
-  tya               ; get MSB again
-  adc #0            ; process the carry
-  tay               ; write to Y
-  lda #$2d          ; write value of Y to $2d (MSB)
-  jsr writereg
-  ply               ; retreive LSB cached on stack
-  lda #$2c          ; write to LSB register
-  jsr writereg
-  ply
-  rts
 
 
 ;;; set text mode, text font, text color, and text direction
@@ -13776,6 +13751,7 @@ docursor
 ;;; CAREFUL -- there are multiple exit points from this. make sure that
 ;;; they always restore the stack appropriately.
 ;;;
+puta
 vputa
   cmp #$0d          ; carriage return
   beq vcr
@@ -13817,6 +13793,8 @@ vcr
   jsr writereg
   lda #$2a
   jsr writereg
+;  lda #MRWC         ; set back to text receive mode
+;  jsr wrcommand
   ply
   pla
   rts
@@ -13854,6 +13832,8 @@ noscroll
   ply               ; restore Y
 endnewline
   stz VCOL
+;  lda #MRWC         ; set back to text receive mode
+;  jsr wrcommand
   pla               ; restore A
   rts
 
@@ -13867,23 +13847,23 @@ vbs
 
   phy               ; save Y temporarily
   dec VCOL          ; moving back to previous column
-  ;; use VCOL to calculate correct position (VCOL * 8). use SCRATCH+1
-  ;; for the MSB
-  stz SCRATCH+1
+  ;; use VCOL to calculate correct position (VCOL * 8). use SCRATCH+14
+  ;; and SCRATCH+15
+  stz SCRATCH+15
   lda VCOL
   asl
-  rol SCRATCH+1
+  rol SCRATCH+15
   asl
-  rol SCRATCH+1
+  rol SCRATCH+15
   asl
-  rol SCRATCH+1
-  sta SCRATCH       ; cache it because we'll need it again in a moment
+  rol SCRATCH+15
+  sta SCRATCH+14     ; cache it because we'll need it again in a moment
 
   ;; reset the text cursor position
   tay
   lda #$2a
   jsr writereg
-  ldy SCRATCH+1
+  ldy SCRATCH+15
   lda #$2b
   jsr writereg
 
@@ -13895,12 +13875,15 @@ vbs
 
   ;; reset text position again
   ;; reset the text cursor position
-  ldy SCRATCH
+  ldy SCRATCH+14
   lda #$2a
   jsr writereg
-  ldy SCRATCH+1
+  ldy SCRATCH+15
   lda #$2b
   jsr writereg
+
+;  lda #MRWC         ; set back to text receive mode
+;  jsr wrcommand
 
   ply               ; restore Y
 
@@ -13909,6 +13892,7 @@ skipbs
   rts
 
 
+crlf
 vcrlf
   jsr vcr
   jsr vlf
