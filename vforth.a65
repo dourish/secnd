@@ -14077,13 +14077,16 @@ busyloop
   ;; reset color. I should check if there's a way to draw a
   ;; rectangle using the current *background* color 'cos that
   ;; would be a lot easier!
-  ply
+  pla
+  tay
   lda #$65
   jsr writereg
-  ply
+  pla
+  tay
   lda #$64
   jsr writereg
-  ply
+  pla
+  tay
   lda #$63
   jsr writereg
 
