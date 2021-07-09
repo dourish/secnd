@@ -5044,8 +5044,8 @@ docount
   jmp next
 
 
-;;; the next two words are for v! and v@, which set and read the video
-;;; registers on the RA8875. So this only applies to the video version
+;;; the next two words are for v@ and v!, which set and read the video
+;;; registers on the RA8875. So this only applies to the video version.
 ;;;
 dovfetch
   lda 1,x
@@ -5081,9 +5081,8 @@ dosgltodbl
   ;; extend whatever the sign bit is of this word into the
   ;; larger word. so check if it's one or zero
   lda stackbase+4,x
-  bit #%10000000
-  beq zerobits      ; it's zero
-  lda #$ff          ; it's one, so load FF into each byte
+  bpl zerobits      ; top bit clear
+  lda #$ff          ; top bit is one, so load FF into each byte
   sta stackbase+3,x
   sta stackbase+4,x
   bra end
@@ -6749,14 +6748,13 @@ moredata
 needsentinel
   clc               ; calculate offset for sentinel value
   lda #<LBLOCK      ; IO buffer base address plus bytes remaining
-  adc READSIZE      ; plus one (the one is handled via Y, to save
-  sta SCRATCH       ; an extra addition).
+  adc READSIZE
+  sta SCRATCH
   lda #>LBLOCK
   adc READSIZE+1
   sta SCRATCH+1
-  ldy #1
   lda #0
-  sta (SCRATCH),y
+  sta (SCRATCH)
 skipsentinel
 
   ;; update read data count. we read in units of 512 bytes, so bottom
@@ -13128,191 +13126,223 @@ vidconf6522
 ;;; that the CLK signal idles low.
 ;;;
 vsendbyte
+.(
+  phx
   phy
-  ;tay               ; y will store the data as we transmit it
+  ldy #SPI_MOSI|RESET  ; constant -- clk 0, mosi 1.
+  ldx #RESET        ; another constant -- clk 0, mosi 0, reset high
 
-; bit 7
-  ;tya
-  asl               ; moves bit to transmit into C (2 cycles)
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #2            ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
-  ;; NOTE used to have "dec SPI_PORT" right after the inc but I
-  ;; moved it down to even out the duty cycle. I strongly suspect
-  ;; that this is completely irrelevant. Once everything is working,
-  ;; try moving it back since the code reads better in its original
-  ;; configuration.
+  asl             ; top bit of a into carry
+  bcs bit7_1
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit6
 
-; bit 6
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit7_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-; bit 5
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit6
+  asl
+  bcs bit6_1
 
-; bit 4
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit5
 
-; bit 3
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit6_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-; bit 2
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit5
+  asl
+  bcs bit5_1
 
-; bit 1
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit4
 
-; bit 0
-  tya               ; get remaining data from Y (2 cycles)
-  asl               ; moves bit to transmit into C (2 cycles)
-  dec SPI_PORT      ; 6 cycles
-  tay               ; temporarily store in Y (2 cycles)
-  
-  ; two rotates will shift the carry into the MOSI position
-  rol               ; move transmit bit to bit 0 (2 cycles)
-  rol               ; move transmit bit to bit 1 (2 cycles)
-  and #%00000010    ; clear out other bits (2 cycles)
-  ora #RESET	    ; keep reset high!
-  sta SPI_PORT      ; 4 cycles
-  inc SPI_PORT      ; 6 cycles
+bit5_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
 
-  ;; set MOSI high at end
-  lda #SPI_MOSI
-  tsb SPI_PORT
+bit4
+  asl
+  bcs bit4_1
 
-  dec SPI_PORT      ; 6 cycles
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit3
 
+bit4_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit3
+  asl
+  bcs bit3_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit2
+
+bit3_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit2
+  asl
+  bcs bit2_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit1
+
+bit2_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit1
+  asl
+  bcs bit1_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra bit0
+
+bit1_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+bit0
+  asl
+  bcs bit0_1
+
+  stx SPI_PORT          ; set ck 0, mosi 0
+  inc SPI_PORT          ; then clk 1
+  bra sent
+
+bit0_1
+  sty SPI_PORT          ; updates both ck and mosi
+  inc SPI_PORT          ; set clock
+
+sent
+  sty SPI_PORT          ; leave clk low, MOSI high
   ply
+  plx
   rts
+.)
+
 
 
 ;;; read a byte via SPI from SPI_PORT, returned in accumulator.
 ;;; Assume the CLK idles low.
 vrecv8bits
-  phx               ; store X, since we'll use it (and can't use Y)
-  lda #0            ; zero out initial result
+.(
+  phy
+  ldy #RESET
 
-  inc SPI_PORT      ; set CLK high for first bit
-  ldx SPI_PORT      ; read data
-  cpx #128          ; this sets carry flag to top bit
-  rol               ; shift carry into A
-  dec SPI_PORT      ; set clock off
+bit7
+  sty SPI_PORT      ; clk low, mosi low, reset high
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit7_0
 
-  inc SPI_PORT      ; set CLK high #2
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit6
 
-  inc SPI_PORT      ; set CLK high #3
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit7_0
+  asl
 
-  inc SPI_PORT      ; set CLK high #4
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit6
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit6_0
 
-  inc SPI_PORT      ; set CLK high #5
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit5
 
-  inc SPI_PORT      ; set CLK high #6
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit6_0
+  asl
 
-  inc SPI_PORT      ; set CLK high #7
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+bit5
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit5_0
 
-  inc SPI_PORT      ; set CLK high #8
-  ldx SPI_PORT      ; get data into X
-  cpx #128          ; set carry flag to top bit of data
-  rol               ; roll that into the accumulator
-  dec SPI_PORT      ; set CLK low
+  sec
+  rol
+  bra bit4
 
-  plx               ; restore X
-  rts               ; return with data in A
+bit5_0
+  asl
+
+bit4
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit4_0
+
+  sec
+  rol
+  bra bit3
+
+bit4_0
+  asl
+
+bit3
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit3_0
+
+  sec
+  rol
+  bra bit2
+
+bit3_0
+  asl
+
+bit2
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit2_0
+
+  sec
+  rol
+  bra bit1
+
+bit2_0
+  asl
+
+bit1
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit1_0
+
+  sec
+  rol
+  bra bit0
+
+bit1_0
+  asl
+
+bit0
+  sty SPI_PORT
+  inc SPI_PORT      ; sets clock but also reads data into N
+  bpl bit0_0
+
+  sec
+  rol
+  bra endread
+
+bit0_0
+  asl
+
+endread
+  dec SPI_PORT
+  ply
+  rts
+.)
 
 
 ;;;
@@ -13323,21 +13353,14 @@ vrecv8bits
 wrcommand
   pha               ; cache value
 
-;  lda #SPI_CS       ; set CS to low
-;  trb SPI_PORT
   lda #RESET        ; everything low except RESET
   sta SPI_PORT
 
   lda #CMDWRITE     ; send CMDWRITE
   jsr vsendbyte
   pla               ; retreive value
-  jsr vsendbyte      ; send it
+  jsr vsendbyte     ; send it
 
-;  lda #SPI_MOSI     ; set MOSI high
-;  tsb SPI_PORT
-
-;  lda #SPI_CS       ; set CS high
-;  tsb SPI_PORT
   lda #SPI_MOSI|SPI_CS|RESET
   sta SPI_PORT
   rts
@@ -14054,16 +14077,13 @@ busyloop
   ;; reset color. I should check if there's a way to draw a
   ;; rectangle using the current *background* color 'cos that
   ;; would be a lot easier!
-  pla
-  tay
+  ply
   lda #$65
   jsr writereg
-  pla
-  tay
+  ply
   lda #$64
   jsr writereg
-  pla
-  tay
+  ply
   lda #$63
   jsr writereg
 

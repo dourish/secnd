@@ -6720,14 +6720,13 @@ moredata
 needsentinel
   clc               ; calculate offset for sentinel value
   lda #<LBLOCK      ; IO buffer base address plus bytes remaining
-  adc READSIZE      ; plus one (the one is handled via Y, to save
-  sta SCRATCH       ; an extra addition).
+  adc READSIZE
+  sta SCRATCH
   lda #>LBLOCK
   adc READSIZE+1
   sta SCRATCH+1
-  ldy #1
   lda #0
-  sta (SCRATCH),y
+  sta (SCRATCH)
 skipsentinel
 
   ;; update read data count. we read in units of 512 bytes, so bottom
