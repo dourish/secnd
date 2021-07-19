@@ -9869,16 +9869,21 @@ abortgenericsub
 ;;; TEMPORARY
 
 dodelete
+  jsr readnext
   jsr deletefile
+.(
+  bcc continue
+  jsr abortgenericsub
+continue
+.)
   jmp next
 
 
 deletefile
-  jsr readnext
   jsr finddirword
 .(
-  bcc continue
-  jmp abortgenericsub
+  bcc continue      ; carry indicates error
+  rts               ; abort on error, let caller report
 continue
 .)
 
@@ -12473,17 +12478,21 @@ table2
   .word dmshow
 table3
   .word table4
-  .byte "xreceive", $00
-  .word dmxr
+  .byte "delete", $00
+  .word dmdelete
 table4
   .word table5
-  .byte "go", $00
-  .word dmgo
+  .byte "xreceive", $00
+  .word dmxr
 table5
   .word table6
+  .byte "go", $00
+  .word dmgo
+table6
+  .word table7
   .byte "help", $00
   .word dmhelp
-table6
+table7
   .word $0000       ; signals last entry in table
   .byte "forth", $00
   .word midway
