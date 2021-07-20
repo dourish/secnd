@@ -13,12 +13,26 @@
 ;;; Keyboard input comes from an ATtiny26 decoder connected to the
 ;;; system VIA at $8000.
 ;;;
-;;; Paul DOurish, July 2021
+;;; Paul Dourish, July 2021
 ;;;
 
-* = $9000
+;;; If the ROM symbol isn't defined, this may just be being included
+;;; in a file to run out of RAM and so don't reset the origin.
 
-SCRATCH    = $0010  ; through to $001F (adopted from monitor)
+#ifdef ROM
+* = $9000
+#endif
+
+;;; definitions here borrowed from elsewhere. They should really be
+;;; included from a standard place.
+#ifndef SCRATCH
+#define SCRATCH $0010
+;SCRATCH    = $0010  ; through to $001F (adopted from monitor)
+#endif
+#ifndef VROW
+VROW       = $000E
+VCOL       = $000F
+#endif
 
 ;;; VIA registers
 ;;;
@@ -656,9 +670,6 @@ defaultcolors
   rts
 
 
-VROW .byte 0
-VCOL .byte 0
-
 ra8875init
   jsr vidconf6522   ; set up the port
   jsr vidinit       ; reset the video board
@@ -737,6 +748,7 @@ docursor
 ;;; CAREFUL -- there are multiple exit points from this. make sure that
 ;;; they always restore the stack appropriately.
 ;;;
+puta
 vputa
   cmp #$0d          ; carriage return
   beq vcr
@@ -870,6 +882,7 @@ skipbs
   rts
 
 
+crlf
 vcrlf
   jsr vcr
   jsr vlf
