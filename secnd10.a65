@@ -97,11 +97,10 @@ PRINTVEC   = $0042  ; and 0043 (borrowed from monitor)
 ;;; 
 ;;;
 ; VROW and VCOL commented out because they are defined in iorom.a65
-;VROW=000E           ; one byte for current row for video cursor
-;VCOL=000F           ; one byte for current column for video cursor
-BASE=$000A          ; and 000B (store two bytes but we only use lower)
+;VROW=000A           ; one byte for current row for video cursor
+;VCOL=000B           ; one byte for current column for video cursor
 USEBLKS=$000D       ; one byte only, block count of USING file
-; leave $000E and $000F clear...
+; leave $000E and $000F clear... FOR WHAT??
 IPTR=$0020          ; and 0021 (input pointer)
 ; used to hold 0030-003F for XMODEM code but that's gone now
 ; YUPLOAD still uses that space now, so leave for the moment
@@ -111,12 +110,12 @@ READSIZE=$0048      ; through $004B -- how much data still to read
 IP=$0050            ; and 0051
 RP=$0052            ; and 0053 (return stack pointer)
 DT=$0054            ; and 0055 (ptr to top of dictionary)
-; reserve 0056, 0057 (we need 0057 to store a JMP instruction)
-XT=$0058            ; and 0059
-STATE=$005A         ; and 005B (compiler flag)
-DPTR=$005C          ; and 005D (used for searching the dictionary)
-DP=$005E            ; and 005F (dictionary pointer i.e. HERE)
-; $0060 is free
+; reserve 0056 to store a JMP instruction
+XT=$0057            ; and 0058
+STATE=$0059         ; and 005A (compiler flag)
+DPTR=$005B          ; and 005C (used for searching the dictionary)
+DP=$005D            ; and 005E (dictionary pointer i.e. HERE)
+BASE=$005F          ; and $0060 (store two bytes though we only use one)
 CWORD=$0061         ; and 0062 (word currently being compiled)
 PADPTR=$0063        ; and 0064 (pointer to text area)
 SOURCE=$0065        ; current input location
@@ -184,6 +183,12 @@ LIMIT=FIRST+BUFFERSPACE
   jmp finddirword
   jmp printstacksub
   jmp sdsavebuf
+  jmp getserial
+  jmp putserial
+  jmp readvreg
+  jmp writevreg
+  jmp sendvdata
+  jmp primm
 #endif
 
 
@@ -1909,11 +1914,7 @@ coldstart
 ;  txs               ; initialize the hardware stack
 ;  cld               ; clear decimal mode
 
-  ;; configure the ACIA
-  lda #%00001011    ; no parity, no echo, no interrupt
-  sta ACIA_COMMAND
-  lda #%00011111    ; 1 stop bit, 8 data bits, 19200 baud
-  sta ACIA_CONTROL
+  jsr initserial
 #endif
 
   ;; initialize the 6522 for the SD routines
@@ -1923,10 +1924,10 @@ coldstart
   jsr initstack
 
   ;; initialize video port
-  jsr ra8875init
+  jsr initvideo
 
   ;; initialize keyboard
-  jsr kbdinit
+  jsr initkeyboard
 
 #ifdef DISKMAN
   jmp startdiskman
@@ -11977,26 +11978,6 @@ doneadd
   
 
 
-
-;;;
-;;; *** USER I/O SUPPORT ROUTINES
-;;;
-
-putserial
-.(
-  pha
-  lda #$10
-wait_txd_empty
-  bit ACIA_STATUS
-  beq wait_txd_empty
-  pla
-  sta ACIA_DATA
-.)
-  rts
-
-
-
-
 ;;;
 ;;; *** NUMBER READING/PRINTING
 ;;;
@@ -12944,7 +12925,7 @@ dmdelete
   bcc continue      ; error reported?
   lda #<dmfileerrstr
   sta PRINTVEC
-  lda #>dmfilerrestr
+  lda #>dmfileerrstr
   sta PRINTVEC+1
   jmp printvecstr   ; jmp saves an rts
 continue
@@ -13206,15 +13187,6 @@ endxmodem
   rts
 #endif
 
-;; get a character from the serial port
-;;
-getserial
-  lda ACIA_STATUS
-  and #$08
-  beq getserial
-  lda ACIA_DATA
-  rts
-
 #if 0
 checksumerror
   lda #<chksmerrstr
@@ -13291,5 +13263,8 @@ hextable:	 .byte "0123456789ABCDEF"
 ;;; are already available. If not, we need to include them here.
 #ifndef ROM
 #include "iorom.a65"
+#else
+#include "../mitemon/apps/spivdefs.a65"
+#include "ioromdefs.a65"
 #endif
 

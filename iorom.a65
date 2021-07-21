@@ -1,5 +1,5 @@
 ;;;
-;;; Video and keyboard support for the Mite.
+;;; I/O support for the Mite -- video, keyboard, serial
 ;;;
 ;;; These are shared routines for use primarily by FORTH but also by
 ;;; anything else; some functions will be included in the main jump
@@ -13,14 +13,18 @@
 ;;; Keyboard input comes from an ATtiny26 decoder connected to the
 ;;; system VIA at $8000.
 ;;;
+;;; Serial is the system 6551 ACIA at $8800.
+;;;
 ;;; Paul Dourish, July 2021
 ;;;
+
 
 ;;; If the ROM symbol isn't defined, this may just be being included
 ;;; in a file to run out of RAM and so don't reset the origin.
 
 #ifdef ROM
 * = $9000
+#include "../mitemon/decl.a65"
 #endif
 
 ;;; definitions here borrowed from elsewhere. They should really be
@@ -30,8 +34,8 @@
 ;SCRATCH    = $0010  ; through to $001F (adopted from monitor)
 #endif
 #ifndef VROW
-VROW       = $000E
-VCOL       = $000F
+VROW       = $000A
+VCOL       = $000B
 #endif
 
 ;;; VIA registers
@@ -60,7 +64,7 @@ CMDREAD =$C0
 
 
 ;;;
-;;; SECTION 1: Low-level SPI code
+;;; Low-level SPI code
 ;;;
 ;;;
 
@@ -366,6 +370,7 @@ wrcommand
 ;  pla               ; retrieve data
 ;  rts
 
+sendvdata
 wrdata
   pha
 ;  ;; set CS low
@@ -416,12 +421,14 @@ rddata
   rts
 
 ;; write value in Y to register in A
+writevreg
 writereg
   jsr wrcommand
   tya
   jsr wrdata
   rts
 
+readvreg
 readreg
   jsr wrcommand
   jsr rddata
@@ -430,7 +437,7 @@ readreg
 
 
 ;;;
-;;; SECTION 3: Control RA8875 functions
+;;; Control RA8875 functions
 ;;;
 ;;;
 
@@ -670,7 +677,10 @@ defaultcolors
   rts
 
 
-ra8875init
+;;; Video initialization -- set up the comm port, reset the video
+;;; board, set up registers, etc.
+;;;
+initvideo
   jsr vidconf6522   ; set up the port
   jsr vidinit       ; reset the video board
   jsr reginit       ; initial register setup
@@ -681,8 +691,9 @@ ra8875init
   stz VCOL
   rts
 
+
 ;;;
-;;; SECTION 5: Implement interpreter commands
+;;; Implement primary functions
 ;;;
 ;;;
 
@@ -1097,7 +1108,7 @@ colors
 ;;; connected to the system VIA.
 ;;;
 
-kbdinit
+initkeyboard
   stz $8003         ; set DDR register for VIA PORTA
   lda #10           ; don't know that I still need this?
   sta $800c         ; don't know that I still need this?
@@ -1120,3 +1131,67 @@ kbdget
   sta $800c         ; set it
   pla               ; retreive data from stack
   rts
+
+
+;;;
+;;; Serial support
+;;;
+
+initserial
+  ;; configure the ACIA
+  lda #%00001011    ; no parity, no echo, no interrupt
+  sta ACIA_COMMAND
+  lda #%00011111    ; 1 stop bit, 8 data bits, 19200 baud
+  sta ACIA_CONTROL
+  rts
+
+;; get a character from the serial port
+;;
+getserial
+  lda ACIA_STATUS
+  and #$08
+  beq getserial
+  lda ACIA_DATA
+  rts
+
+;;; send a character to the serial port
+;;;
+putserial
+.(
+  pha
+  lda #$10
+wait_txd_empty
+  bit ACIA_STATUS
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+
+;;; print immediate -- hack the stack to find the string to print
+;;; right after the JSR instruction, and when complete, jump over the
+;;; string to resume execution.
+;;;
+DPL     =   SCRATCH+14
+DPH     =   SCRATCH+15
+primm:
+      pla               ; get low part of (string address-1)
+      sta   DPL
+      pla               ; get high part of (string address-1)
+      sta   DPH
+      bra   primm3
+primm2:
+      jsr   puta        ; output a string char
+primm3:
+      inc   DPL         ; advance the string pointer
+      bne   primm4
+      inc   DPH
+primm4:
+      lda   (DPL)       ; get string char
+      bne   primm2      ; output and continue if not NUL
+      lda   DPH
+      pha
+      lda   DPL
+      pha
+      rts               ; proceed at code following the NUL
