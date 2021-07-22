@@ -11912,7 +11912,9 @@ endedit
   jsr nulltospace
   lda #$12
   sta row
+  sta VROW
   stz col
+  stz VCOL
   jsr moveto
   rts
 
@@ -12920,7 +12922,7 @@ dmnofilestr .byte "No such file", $0a, $0d, $00
 
 dmdelete
   jsr paramtoword
-  jsr showsub
+  jsr deletefilesub
 .(
   bcc continue      ; error reported?
   lda #<dmfileerrstr
@@ -12941,7 +12943,7 @@ dmhelp
   sta PRINTVEC+1
   jmp printvecstr   ; jmp saves an rts
 
-dmhelpstr .byte "mount, dir, show <file>, go <addr>, forth, help", $0a, $0d, $00
+dmhelpstr .byte "mount, dir, show <file>, delete <file>, go <addr>, forth, help", $0a, $0d, $00
 
 
 dmgo
