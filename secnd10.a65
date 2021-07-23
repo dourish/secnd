@@ -9774,6 +9774,8 @@ newfilesub
   lda SCRATCH+13
   sta stackbase+2,x
 
+  ;; mkcanon took filename from WORD, but left the canonical
+  ;; version on the PAD, so that's where we take it from
   jsr copypadname
   inx
   inx
@@ -9837,11 +9839,6 @@ abortmkfile
 
 ;;; TESTING
 dorename
-  jsr renamefile
-  jmp next
-
-;;; rename a file, taking both old and new names from the input stream
-renamefile
   jsr readnext
   jsr finddirword
 .(
@@ -9849,21 +9846,26 @@ renamefile
   jmp abortgenericsub
 continue
 .)
-
-  ;; at this point, stack should have sector number and pointer,
-  ;; and the sector should be loaded in the I/O buffer.
   jsr readnext      ; get destination filename
-  ; jsr mkcanon       ; canonicalize (not needed, lookupdir will do it)
+  jsr renamefilesub
+  jmp next
 
-  ;; make sure that the destination file does NOT exist
+
+;;; rename a file. On entry, the file to be renamed has already
+;;; been looked up in the directory, and the usual data structure
+;;; is on the stack. The destination filename is in WORD but it has
+;;; not yet been looked up.
+renamefilesub
+
+  ;; first, make sure that the destination file does NOT exist
 .(
-  jsr finddirword
-  bcs continue
-  jsr close3cells   ; throw away results from directory lookup
+  jsr finddirword   ; look up name from WORD
+  bcs continue      ; C = not found, so that's okay
+  jsr close3cells   ; else, throw away results from directory lookup
   jsr close3cells   ; and from the last one
-  bra abortgenericsub
+  bra abortgenericsub  ; and abort
 continue
-  ;; reload original block in case we just trashed it
+  ;; reload original block in case finddirword just trashed it
   jsr open2cells
   lda stackbase+7,x
   sta stackbase+1,x
@@ -9877,6 +9879,9 @@ continue
 
 .)
 
+  ;; finddirword make a canonical version of the name and left
+  ;; it on the PAD, so that's what we work with now
+  ;;
   jsr copypadname   ; copy name from pad to address on stack
   inx               ; drop that pointer from the stack
   inx
